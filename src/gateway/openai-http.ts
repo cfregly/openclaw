@@ -9,12 +9,17 @@ import { consumeGatewayAbuseAnomaly } from "./abuse-anomaly.js";
 import type {
   ResolvedGatewayAbuseAnomalyConfig,
   ResolvedGatewayAbuseCorrelationConfig,
+  ResolvedGatewayAbuseIncidentConfig,
   ResolvedGatewayAbuseQuotaConfig,
 } from "./abuse-config.js";
 import {
   recordGatewayAbuseCorrelationSignal,
   resolveGatewayAbuseCorrelationFingerprint,
 } from "./abuse-correlation.js";
+import {
+  getActiveGatewayAbuseContainment,
+  recordGatewayAbuseIncidentSignal,
+} from "./abuse-incident.js";
 import { consumeGatewayAbuseQuota, resolveGatewayAbuseQuotaHttpKey } from "./abuse-quota.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
@@ -36,6 +41,7 @@ type OpenAiHttpOptions = {
   abuseQuotaConfig?: ResolvedGatewayAbuseQuotaConfig;
   anomalyConfig?: ResolvedGatewayAbuseAnomalyConfig;
   correlationConfig?: ResolvedGatewayAbuseCorrelationConfig;
+  incidentConfig?: ResolvedGatewayAbuseIncidentConfig;
 };
 
 type OpenAiChatMessage = {
@@ -260,10 +266,49 @@ export async function handleOpenAiHttpRequest(
     actorId: user ? `user:${user}` : `agent:${agentId}`,
     sessionKey: explicitSessionKey,
   });
+  if (opts.incidentConfig) {
+    const containment = getActiveGatewayAbuseContainment({
+      key: abuseTupleKey,
+    });
+    if (containment.active) {
+      sendRateLimited(
+        res,
+        containment.retryAfterMs,
+        `incident containment active for chat.send; retry after ${Math.ceil(containment.retryAfterMs / 1000)}s`,
+      );
+      return true;
+    }
+  }
   const requestCorrelationFingerprint = resolveGatewayAbuseCorrelationFingerprint({
     method: "chat.send",
     text: [prompt.extraSystemPrompt, prompt.message].filter(Boolean).join("\n\n"),
   });
+  const recordIncident = (params: {
+    source: "anomaly" | "quota" | "correlation";
+    severity: "warn" | "critical";
+    checkId: string;
+    reasonCodes: string[];
+    clusterId?: string;
+  }) => {
+    if (!opts.incidentConfig) {
+      return;
+    }
+    const decision = recordGatewayAbuseIncidentSignal({
+      key: abuseTupleKey,
+      source: params.source,
+      severity: params.severity,
+      checkId: params.checkId,
+      reasonCodes: params.reasonCodes,
+      clusterId: params.clusterId,
+      incidentConfig: opts.incidentConfig,
+    });
+    if (!decision) {
+      return;
+    }
+    logWarn(
+      `openai-compat: incident signal source=${params.source} incidentId=${decision.incidentId} state=${decision.state} autoContained=${decision.autoContained ? "yes" : "no"}`,
+    );
+  };
   const recordCorrelation = (params: {
     source: "request" | "quota" | "anomaly";
     score: number;
@@ -285,6 +330,13 @@ export async function handleOpenAiHttpRequest(
     logWarn(
       `openai-compat: abuse correlation observed severity=${decision.severity} mode=${decision.mode} score=${decision.clusterScore} threshold=${thresholdLabel} checkId=${decision.checkId} clusterId=${decision.clusterId} fingerprint=${decision.fingerprint} fanoutActors=${decision.fanout.actors} fanoutIps=${decision.fanout.ips} fanoutAccounts=${decision.fanout.accounts}`,
     );
+    recordIncident({
+      source: "correlation",
+      severity: decision.severity === "critical" ? "critical" : "warn",
+      checkId: decision.checkId,
+      reasonCodes: params.reasonCodes,
+      clusterId: decision.clusterId,
+    });
   };
   recordCorrelation({
     source: "request",
@@ -312,6 +364,12 @@ export async function handleOpenAiHttpRequest(
         fingerprint: anomalyDecision.fingerprint,
       });
     }
+    recordIncident({
+      source: "anomaly",
+      severity: anomalyDecision.action === "warn" ? "warn" : "critical",
+      checkId: anomalyDecision.checkId,
+      reasonCodes: anomalyDecision.reasonCodes,
+    });
   }
   if (!anomalyDecision.allowed) {
     sendRateLimited(
@@ -339,6 +397,12 @@ export async function handleOpenAiHttpRequest(
       score: quotaBudget.limit ?? 25,
       reasonCodes: [`quota_${quotaBudget.scope}`],
       fingerprint: requestCorrelationFingerprint,
+    });
+    recordIncident({
+      source: "quota",
+      severity: quotaBudget.allowed ? "warn" : "critical",
+      checkId: "gateway.abuse.quota.observed",
+      reasonCodes: [`quota_${quotaBudget.scope}`],
     });
   }
   if (!quotaBudget.allowed) {
