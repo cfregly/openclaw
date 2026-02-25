@@ -52,7 +52,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, sendRateLimited, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { getHeader, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
 import {
   CreateResponseBodySchema,
   type CreateResponseBody,
@@ -328,14 +328,16 @@ export async function handleOpenResponsesHttpRequest(
   const agentId = resolveAgentIdForRequest({ req, model });
   const sessionKey = resolveOpenResponsesSessionKey({ req, agentId, user });
 
-  const explicitSessionKey = getHeader(req, "x-openclaw-session-key")?.trim();
+  const authActorId =
+    handled.authResult.user && handled.authResult.user.trim().length > 0
+      ? `auth-user:${handled.authResult.user.trim().toLowerCase()}`
+      : `auth:${handled.authResult.method ?? "unknown"}`;
   const abuseTupleKey = resolveGatewayAbuseQuotaHttpKey({
     method: "chat.send",
     req,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
-    actorId: user ? `user:${user}` : `agent:${agentId}`,
-    sessionKey: explicitSessionKey,
+    actorId: authActorId,
   });
   const recordAudit = (params: {
     kind: "request" | "anomaly" | "quota" | "correlation" | "incident" | "containment";
@@ -373,6 +375,7 @@ export async function handleOpenResponsesHttpRequest(
   if (opts.incidentConfig) {
     const containment = getActiveGatewayAbuseContainment({
       key: abuseTupleKey,
+      incidentConfig: opts.incidentConfig,
     });
     if (containment.active) {
       recordAudit({
@@ -681,6 +684,8 @@ export async function handleOpenResponsesHttpRequest(
     reasonCodes: ["method_call"],
     payload: {
       method: "chat.send",
+      authMethod: handled.authResult.method,
+      authUser: handled.authResult.user,
     },
   });
   recordCorrelation({

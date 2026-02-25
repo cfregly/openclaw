@@ -10,8 +10,7 @@ export type GatewayAbuseAuditKind =
   | "quota"
   | "correlation"
   | "incident"
-  | "containment"
-  | "tool_event";
+  | "containment";
 
 export type GatewayAbuseAuditRecord = {
   id: number;

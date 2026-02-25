@@ -1,8 +1,14 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  authorizeHttpGatewayConnect,
+  type GatewayAuthResult,
+  type ResolvedGatewayAuth,
+} from "./auth.js";
 import { sendGatewayAuthFailure } from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
+
+export type GatewayHttpAuthorizedResult = GatewayAuthResult & { ok: true };
 
 export async function authorizeGatewayBearerRequestOrReply(params: {
   req: IncomingMessage;
@@ -11,7 +17,7 @@ export async function authorizeGatewayBearerRequestOrReply(params: {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
-}): Promise<boolean> {
+}): Promise<GatewayHttpAuthorizedResult | undefined> {
   const token = getBearerToken(params.req);
   const authResult = await authorizeHttpGatewayConnect({
     auth: params.auth,
@@ -23,7 +29,7 @@ export async function authorizeGatewayBearerRequestOrReply(params: {
   });
   if (!authResult.ok) {
     sendGatewayAuthFailure(params.res, authResult);
-    return false;
+    return undefined;
   }
-  return true;
+  return authResult;
 }

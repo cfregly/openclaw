@@ -248,12 +248,14 @@ async function persistState(nowMs: number): Promise<void> {
   }
 }
 
-function pruneExpiredContainment(nowMs: number): void {
+function pruneExpiredContainment(nowMs: number): boolean {
+  let changed = false;
   for (const [tupleScopeKey, containment] of containmentByTupleScope) {
     if (containment.expiresAtMs > nowMs) {
       continue;
     }
     containmentByTupleScope.delete(tupleScopeKey);
+    changed = true;
     const incident = incidentsById.get(containment.incidentId);
     if (!incident) {
       continue;
@@ -266,8 +268,30 @@ function pruneExpiredContainment(nowMs: number): void {
         ts: nowMs,
         type: "containment_expired",
       });
+      changed = true;
     }
   }
+  return changed;
+}
+
+function pruneRetainedIncidents(nowMs: number, retentionDays: number): boolean {
+  const retentionMs = Math.max(1, retentionDays) * 24 * 60 * 60 * 1000;
+  const cutoffMs = nowMs - retentionMs;
+  let changed = false;
+  for (const [incidentId, incident] of incidentsById) {
+    if (incident.updatedAtMs >= cutoffMs) {
+      continue;
+    }
+    // Keep unresolved incidents for operator continuity and active containment safety.
+    if (incident.state !== "resolved") {
+      continue;
+    }
+    incidentsById.delete(incidentId);
+    activeIncidentByScope.delete(incident.scopeKey);
+    containmentByTupleScope.delete(incident.tupleScopeKey);
+    changed = true;
+  }
+  return changed;
 }
 
 function upsertCheckId(incident: GatewayAbuseIncidentRecord, checkId: string): void {
@@ -314,6 +338,7 @@ export function recordGatewayAbuseIncidentSignal(params: {
   const incidentConfig = params.incidentConfig ?? DEFAULT_INCIDENT_CONFIG;
   ensureLoaded();
   pruneExpiredContainment(nowMs);
+  pruneRetainedIncidents(nowMs, incidentConfig.retentionDays);
 
   if (incidentConfig.mode === "off") {
     return undefined;
@@ -414,14 +439,21 @@ export function recordGatewayAbuseIncidentSignal(params: {
 export function getActiveGatewayAbuseContainment(params: {
   key: string;
   nowMs?: number;
+  incidentConfig?: ResolvedGatewayAbuseIncidentConfig;
 }): GatewayAbuseContainmentDecision {
   const nowMs = params.nowMs ?? Date.now();
+  const incidentConfig = params.incidentConfig ?? DEFAULT_INCIDENT_CONFIG;
   ensureLoaded();
-  pruneExpiredContainment(nowMs);
+  const retentionPruned = pruneRetainedIncidents(nowMs, incidentConfig.retentionDays);
+  const containmentPruned = pruneExpiredContainment(nowMs);
+  let changed = retentionPruned || containmentPruned;
 
   const scopeKey = parseTupleScope(params.key);
   const containment = containmentByTupleScope.get(scopeKey);
   if (!containment) {
+    if (changed) {
+      schedulePersist(nowMs);
+    }
     return {
       active: false,
       retryAfterMs: 0,
@@ -431,11 +463,18 @@ export function getActiveGatewayAbuseContainment(params: {
   const retryAfterMs = Math.max(0, containment.expiresAtMs - nowMs);
   if (retryAfterMs <= 0) {
     containmentByTupleScope.delete(scopeKey);
+    changed = true;
+    if (changed) {
+      schedulePersist(nowMs);
+    }
     return {
       active: false,
       retryAfterMs: 0,
       scopeKey,
     };
+  }
+  if (changed) {
+    schedulePersist(nowMs);
   }
   return {
     active: true,
@@ -451,10 +490,16 @@ export function transitionGatewayAbuseIncident(params: {
   actor?: string;
   note?: string;
   nowMs?: number;
+  incidentConfig?: ResolvedGatewayAbuseIncidentConfig;
 }): GatewayAbuseIncidentRecord | undefined {
   const nowMs = params.nowMs ?? Date.now();
+  const incidentConfig = params.incidentConfig ?? DEFAULT_INCIDENT_CONFIG;
   ensureLoaded();
-  pruneExpiredContainment(nowMs);
+  const retentionPruned = pruneRetainedIncidents(nowMs, incidentConfig.retentionDays);
+  const containmentPruned = pruneExpiredContainment(nowMs);
+  if (retentionPruned || containmentPruned) {
+    schedulePersist(nowMs);
+  }
 
   const incident = incidentsById.get(params.incidentId);
   if (!incident) {
@@ -508,9 +553,19 @@ export function transitionGatewayAbuseIncident(params: {
   return incident;
 }
 
-export function getGatewayAbuseIncidentSnapshot(): IncidentPersisted {
+export function getGatewayAbuseIncidentSnapshot(params?: {
+  nowMs?: number;
+  incidentConfig?: ResolvedGatewayAbuseIncidentConfig;
+}): IncidentPersisted {
+  const nowMs = params?.nowMs ?? Date.now();
+  const incidentConfig = params?.incidentConfig ?? DEFAULT_INCIDENT_CONFIG;
   ensureLoaded();
-  return serializeState(Date.now());
+  const retentionPruned = pruneRetainedIncidents(nowMs, incidentConfig.retentionDays);
+  const containmentPruned = pruneExpiredContainment(nowMs);
+  if (retentionPruned || containmentPruned) {
+    schedulePersist(nowMs);
+  }
+  return serializeState(nowMs);
 }
 
 export const __testing = {

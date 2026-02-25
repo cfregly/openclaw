@@ -372,7 +372,7 @@ export type GatewayAbuseIncidentConfig = {
 };
 
 export type GatewayAbuseAuditLedgerConfig = {
-  /** Enforcement mode for the unified tool-use audit ledger. */
+  /** Enforcement mode for the gateway abuse decision audit ledger. */
   mode?: GatewayAbuseMode;
   /** Default retention horizon (days) for audit ledger rows. */
   retentionDays?: number;

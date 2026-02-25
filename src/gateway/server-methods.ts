@@ -241,7 +241,10 @@ export async function handleGatewayRequest(
   };
 
   if (abuseTupleKey && incidentConfig) {
-    const containment = getActiveGatewayAbuseContainment({ key: abuseTupleKey });
+    const containment = getActiveGatewayAbuseContainment({
+      key: abuseTupleKey,
+      incidentConfig,
+    });
     if (containment.active) {
       recordAudit({
         kind: "containment",
