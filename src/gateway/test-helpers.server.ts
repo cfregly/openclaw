@@ -18,6 +18,8 @@ import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { __testing as anomalyTesting } from "./abuse-anomaly.js";
+import { __testing as quotaTesting } from "./abuse-quota.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import type { GatewayServerOptions } from "./server.js";
@@ -157,6 +159,8 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
   embeddedRunMock.waitResults.clear();
+  anomalyTesting.resetGatewayAbuseAnomalyState();
+  quotaTesting.resetGatewayAbuseQuotaState();
   drainSystemEvents(resolveMainSessionKeyFromConfig());
   resetAgentRunContextForTest();
   const mod = await getServerModule();

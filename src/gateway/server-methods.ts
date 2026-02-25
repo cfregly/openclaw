@@ -1,5 +1,13 @@
 import { loadConfig } from "../config/config.js";
-import type { ResolvedGatewayAbuseQuotaConfig } from "./abuse-config.js";
+import {
+  consumeGatewayAbuseAnomaly,
+  isGatewayAbuseAnomalyRpcMethod,
+  resolveGatewayAbuseAnomalyRpcInput,
+} from "./abuse-anomaly.js";
+import type {
+  ResolvedGatewayAbuseAnomalyConfig,
+  ResolvedGatewayAbuseQuotaConfig,
+} from "./abuse-config.js";
 import { resolveGatewayAbuseConfig } from "./abuse-config.js";
 import {
   consumeGatewayAbuseQuota,
@@ -106,6 +114,7 @@ export async function handleGatewayRequest(
   opts: GatewayRequestOptions & {
     extraHandlers?: GatewayRequestHandlers;
     abuseQuotaConfig?: ResolvedGatewayAbuseQuotaConfig;
+    anomalyConfig?: ResolvedGatewayAbuseAnomalyConfig;
   },
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context } = opts;
@@ -115,8 +124,62 @@ export async function handleGatewayRequest(
     return;
   }
   const requestParams = (req.params ?? {}) as Record<string, unknown>;
+  const resolvedAbuseConfig =
+    opts.abuseQuotaConfig && opts.anomalyConfig
+      ? undefined
+      : resolveGatewayAbuseConfig(loadConfig());
+  if (isGatewayAbuseAnomalyRpcMethod(req.method)) {
+    const anomalyInput = resolveGatewayAbuseAnomalyRpcInput({
+      method: req.method,
+      requestParams,
+    });
+    if (anomalyInput) {
+      const anomalyConfig = opts.anomalyConfig ?? resolvedAbuseConfig?.anomaly;
+      const anomalyDecision = consumeGatewayAbuseAnomaly({
+        key: resolveGatewayAbuseQuotaRpcKey({
+          method: req.method,
+          client,
+          requestParams,
+        }),
+        input: anomalyInput,
+        anomalyConfig,
+      });
+      if (anomalyDecision.observed) {
+        const thresholdLabel = anomalyDecision.threshold
+          ? String(anomalyDecision.threshold)
+          : "n/a";
+        context.logGateway.warn(
+          `gateway abuse anomaly observed method=${req.method} mode=${anomalyDecision.mode} action=${anomalyDecision.action} score=${anomalyDecision.score} threshold=${thresholdLabel} checkId=${anomalyDecision.checkId} retryAfterMs=${anomalyDecision.retryAfterMs} fingerprint=${anomalyDecision.fingerprint ?? "none"} reasons=${anomalyDecision.reasonCodes.join(",") || "none"} key=${anomalyDecision.key}`,
+        );
+      }
+      if (!anomalyDecision.allowed) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `anomaly policy triggered for ${req.method}; retry after ${Math.ceil(anomalyDecision.retryAfterMs / 1000)}s`,
+            {
+              retryable: true,
+              retryAfterMs: anomalyDecision.retryAfterMs,
+              details: {
+                checkId: anomalyDecision.checkId,
+                method: req.method,
+                action: anomalyDecision.action,
+                score: anomalyDecision.score,
+                threshold: anomalyDecision.threshold,
+                fingerprint: anomalyDecision.fingerprint,
+                reasons: anomalyDecision.reasonCodes,
+              },
+            },
+          ),
+        );
+        return;
+      }
+    }
+  }
   if (isGatewayAbuseQuotaRpcMethod(req.method)) {
-    const quotaConfig = opts.abuseQuotaConfig ?? resolveGatewayAbuseConfig(loadConfig()).quota;
+    const quotaConfig = opts.abuseQuotaConfig ?? resolvedAbuseConfig?.quota;
     const budget = consumeGatewayAbuseQuota({
       key: resolveGatewayAbuseQuotaRpcKey({
         method: req.method,

@@ -503,7 +503,9 @@ export function createGatewayHttpServer(opts: {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
-      const abuseQuotaConfig = resolveGatewayAbuseConfig(configSnapshot).quota;
+      const abuseConfig = resolveGatewayAbuseConfig(configSnapshot);
+      const abuseQuotaConfig = abuseConfig.quota;
+      const anomalyConfig = abuseConfig.anomaly;
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
@@ -558,6 +560,7 @@ export function createGatewayHttpServer(opts: {
             allowRealIpFallback,
             rateLimiter,
             abuseQuotaConfig,
+            anomalyConfig,
           })
         ) {
           return;
@@ -571,6 +574,7 @@ export function createGatewayHttpServer(opts: {
             allowRealIpFallback,
             rateLimiter,
             abuseQuotaConfig,
+            anomalyConfig,
           })
         ) {
           return;
