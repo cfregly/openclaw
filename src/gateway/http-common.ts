@@ -43,13 +43,17 @@ export function sendUnauthorized(res: ServerResponse) {
   });
 }
 
-export function sendRateLimited(res: ServerResponse, retryAfterMs?: number) {
+export function sendRateLimited(
+  res: ServerResponse,
+  retryAfterMs?: number,
+  message = "Too many failed authentication attempts. Please try again later.",
+) {
   if (retryAfterMs && retryAfterMs > 0) {
     res.setHeader("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
   }
   sendJson(res, 429, {
     error: {
-      message: "Too many failed authentication attempts. Please try again later.",
+      message,
       type: "rate_limited",
     },
   });

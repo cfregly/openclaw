@@ -5,6 +5,8 @@ import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
+import type { ResolvedGatewayAbuseQuotaConfig } from "./abuse-config.js";
+import { consumeGatewayAbuseQuota, resolveGatewayAbuseQuotaHttpKey } from "./abuse-quota.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
@@ -12,9 +14,9 @@ import {
 } from "./agent-prompt.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
+import { sendJson, sendRateLimited, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+import { getHeader, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -22,6 +24,7 @@ type OpenAiHttpOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  abuseQuotaConfig?: ResolvedGatewayAbuseQuotaConfig;
 };
 
 type OpenAiChatMessage = {
@@ -234,6 +237,36 @@ export async function handleOpenAiHttpRequest(
         type: "invalid_request_error",
       },
     });
+    return true;
+  }
+
+  const explicitSessionKey = getHeader(req, "x-openclaw-session-key")?.trim();
+  const quotaBudget = consumeGatewayAbuseQuota({
+    key: resolveGatewayAbuseQuotaHttpKey({
+      method: "chat.send",
+      req,
+      trustedProxies: opts.trustedProxies,
+      allowRealIpFallback: opts.allowRealIpFallback,
+      actorId: user ? `user:${user}` : `agent:${agentId}`,
+      sessionKey: explicitSessionKey,
+    }),
+    quotaConfig: opts.abuseQuotaConfig,
+  });
+  if (quotaBudget.observed) {
+    const windowLabel = quotaBudget.windowMs
+      ? `${Math.ceil(quotaBudget.windowMs / 1000)}s`
+      : "mixed";
+    const limitLabel = quotaBudget.limit ? String(quotaBudget.limit) : "mixed";
+    logWarn(
+      `openai-compat: abuse quota observed mode=${quotaBudget.mode} scope=${quotaBudget.scope} limit=${limitLabel} window=${windowLabel} retryAfterMs=${quotaBudget.retryAfterMs} key=${quotaBudget.key}`,
+    );
+  }
+  if (!quotaBudget.allowed) {
+    sendRateLimited(
+      res,
+      quotaBudget.retryAfterMs,
+      `rate limit exceeded for chat.send; retry after ${Math.ceil(quotaBudget.retryAfterMs / 1000)}s`,
+    );
     return true;
   }
 

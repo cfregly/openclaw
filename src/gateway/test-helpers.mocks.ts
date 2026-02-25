@@ -225,6 +225,7 @@ export const testState = {
   cronEnabled: false as boolean | undefined,
   gatewayBind: undefined as "auto" | "lan" | "tailnet" | "loopback" | undefined,
   gatewayAuth: undefined as Record<string, unknown> | undefined,
+  gatewayAbuse: undefined as Record<string, unknown> | undefined,
   gatewayControlUi: undefined as Record<string, unknown> | undefined,
   hooksConfig: undefined as HooksConfig | undefined,
   canvasHostPort: undefined as number | undefined,
@@ -479,6 +480,9 @@ vi.mock("../config/config.js", async () => {
       }
       if (testState.gatewayAuth) {
         fileGateway.auth = testState.gatewayAuth;
+      }
+      if (testState.gatewayAbuse) {
+        fileGateway.abuse = testState.gatewayAbuse;
       }
       if (testState.gatewayControlUi) {
         fileGateway.controlUi = testState.gatewayControlUi;

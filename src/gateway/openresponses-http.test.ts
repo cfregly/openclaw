@@ -5,7 +5,13 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
-import { agentCommand, getFreePort, installGatewayTestHooks } from "./test-helpers.js";
+import {
+  agentCommand,
+  getFreePort,
+  installGatewayTestHooks,
+  testState,
+  withGatewayServer,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -428,6 +434,60 @@ describe("OpenResponses HTTP API (e2e)", () => {
     } finally {
       // shared server
     }
+  });
+
+  it("returns 429 for over-limit requests when gateway.abuse.quota is enforce", async () => {
+    testState.gatewayAuth = {
+      mode: "token",
+      token: "secret",
+    };
+    testState.gatewayAbuse = {
+      quota: {
+        mode: "enforce",
+        burstLimit: 1,
+        burstWindowMs: 60_000,
+        sustainedLimit: 100,
+        sustainedWindowMs: 600_000,
+      },
+    };
+
+    await withGatewayServer(
+      async ({ port }) => {
+        const body = {
+          model: "openclaw",
+          input: "hi",
+        };
+
+        const first = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer secret",
+          },
+          body: JSON.stringify(body),
+        });
+        expect(first.status).toBe(200);
+        await first.text();
+
+        const second = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer secret",
+          },
+          body: JSON.stringify(body),
+        });
+        expect(second.status).toBe(429);
+        expect(second.headers.get("retry-after")).toBeTruthy();
+      },
+      {
+        serverOptions: {
+          host: "127.0.0.1",
+          controlUiEnabled: false,
+          openResponsesEnabled: true,
+        },
+      },
+    );
   });
 
   it("streams OpenResponses SSE events", async () => {

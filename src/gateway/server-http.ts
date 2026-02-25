@@ -19,6 +19,7 @@ import { loadConfig } from "../config/config.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
+import { resolveGatewayAbuseConfig } from "./abuse-config.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   createAuthRateLimiter,
@@ -502,6 +503,7 @@ export function createGatewayHttpServer(opts: {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+      const abuseQuotaConfig = resolveGatewayAbuseConfig(configSnapshot).quota;
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
@@ -555,6 +557,7 @@ export function createGatewayHttpServer(opts: {
             trustedProxies,
             allowRealIpFallback,
             rateLimiter,
+            abuseQuotaConfig,
           })
         ) {
           return;
@@ -567,6 +570,7 @@ export function createGatewayHttpServer(opts: {
             trustedProxies,
             allowRealIpFallback,
             rateLimiter,
+            abuseQuotaConfig,
           })
         ) {
           return;
