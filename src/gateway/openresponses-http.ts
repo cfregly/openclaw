@@ -30,8 +30,10 @@ import {
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
 import { consumeGatewayAbuseAnomaly } from "./abuse-anomaly.js";
+import { recordGatewayAbuseAuditEvent } from "./abuse-audit-ledger.js";
 import type {
   ResolvedGatewayAbuseAnomalyConfig,
+  ResolvedGatewayAbuseAuditLedgerConfig,
   ResolvedGatewayAbuseCorrelationConfig,
   ResolvedGatewayAbuseIncidentConfig,
   ResolvedGatewayAbuseQuotaConfig,
@@ -72,6 +74,7 @@ type OpenResponsesHttpOptions = {
   anomalyConfig?: ResolvedGatewayAbuseAnomalyConfig;
   correlationConfig?: ResolvedGatewayAbuseCorrelationConfig;
   incidentConfig?: ResolvedGatewayAbuseIncidentConfig;
+  auditLedgerConfig?: ResolvedGatewayAbuseAuditLedgerConfig;
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
@@ -334,11 +337,57 @@ export async function handleOpenResponsesHttpRequest(
     actorId: user ? `user:${user}` : `agent:${agentId}`,
     sessionKey: explicitSessionKey,
   });
+  const recordAudit = (params: {
+    kind: "request" | "anomaly" | "quota" | "correlation" | "incident" | "containment";
+    allowed?: boolean;
+    action?: string;
+    checkId?: string;
+    severity?: "warn" | "critical";
+    score?: number;
+    fingerprint?: string;
+    clusterId?: string;
+    incidentId?: string;
+    reasonCodes?: string[];
+    payload?: unknown;
+  }) => {
+    if (!opts.auditLedgerConfig) {
+      return;
+    }
+    recordGatewayAbuseAuditEvent({
+      kind: params.kind,
+      key: abuseTupleKey,
+      method: "chat.send",
+      allowed: params.allowed,
+      action: params.action,
+      checkId: params.checkId,
+      severity: params.severity,
+      score: params.score,
+      fingerprint: params.fingerprint,
+      clusterId: params.clusterId,
+      incidentId: params.incidentId,
+      reasonCodes: params.reasonCodes,
+      payload: params.payload,
+      auditConfig: opts.auditLedgerConfig,
+    });
+  };
   if (opts.incidentConfig) {
     const containment = getActiveGatewayAbuseContainment({
       key: abuseTupleKey,
     });
     if (containment.active) {
+      recordAudit({
+        kind: "containment",
+        allowed: false,
+        action: "block",
+        checkId: "gateway.abuse.incident.containment",
+        severity: "critical",
+        incidentId: containment.incidentId,
+        reasonCodes: ["active_containment"],
+        payload: {
+          retryAfterMs: containment.retryAfterMs,
+          scope: containment.scopeKey,
+        },
+      });
       sendRateLimited(
         res,
         containment.retryAfterMs,
@@ -376,6 +425,18 @@ export async function handleOpenResponsesHttpRequest(
     if (!decision) {
       return;
     }
+    recordAudit({
+      kind: "incident",
+      action: decision.state,
+      checkId: params.checkId,
+      severity: params.severity,
+      incidentId: decision.incidentId,
+      reasonCodes: params.reasonCodes,
+      payload: {
+        source: params.source,
+        autoContained: decision.autoContained,
+      },
+    });
     logWarn(
       `openresponses: incident signal source=${params.source} incidentId=${decision.incidentId} state=${decision.state} autoContained=${decision.autoContained ? "yes" : "no"}`,
     );
@@ -408,6 +469,21 @@ export async function handleOpenResponsesHttpRequest(
       reasonCodes: params.reasonCodes,
       clusterId: decision.clusterId,
     });
+    recordAudit({
+      kind: "correlation",
+      allowed: true,
+      action: decision.severity,
+      checkId: decision.checkId,
+      severity: decision.severity === "critical" ? "critical" : "warn",
+      score: decision.clusterScore,
+      fingerprint: decision.fingerprint,
+      clusterId: decision.clusterId,
+      reasonCodes: params.reasonCodes,
+      payload: {
+        fanout: decision.fanout,
+        threshold: decision.threshold,
+      },
+    });
   };
   const quotaBudget = consumeGatewayAbuseQuota({
     key: abuseTupleKey,
@@ -432,6 +508,20 @@ export async function handleOpenResponsesHttpRequest(
       severity: quotaBudget.allowed ? "warn" : "critical",
       checkId: "gateway.abuse.quota.observed",
       reasonCodes: [`quota_${quotaBudget.scope}`],
+    });
+    recordAudit({
+      kind: "quota",
+      allowed: quotaBudget.allowed,
+      action: quotaBudget.allowed ? "observe" : "enforce",
+      checkId: "gateway.abuse.quota.observed",
+      severity: quotaBudget.allowed ? "warn" : "critical",
+      score: quotaBudget.limit,
+      reasonCodes: [`quota_${quotaBudget.scope}`],
+      payload: {
+        retryAfterMs: quotaBudget.retryAfterMs,
+        scope: quotaBudget.scope,
+        windowMs: quotaBudget.windowMs,
+      },
     });
   }
   if (!quotaBudget.allowed) {
@@ -582,6 +672,17 @@ export async function handleOpenResponsesHttpRequest(
     method: "chat.send",
     text: [extraSystemPrompt, prompt.message].filter(Boolean).join("\n\n"),
   });
+  recordAudit({
+    kind: "request",
+    allowed: true,
+    action: "allow",
+    checkId: "gateway.abuse.audit.request",
+    fingerprint: correlationFingerprint,
+    reasonCodes: ["method_call"],
+    payload: {
+      method: "chat.send",
+    },
+  });
   recordCorrelation({
     source: "request",
     score: 10,
@@ -614,6 +715,20 @@ export async function handleOpenResponsesHttpRequest(
       severity: anomalyDecision.action === "warn" ? "warn" : "critical",
       checkId: anomalyDecision.checkId,
       reasonCodes: anomalyDecision.reasonCodes,
+    });
+    recordAudit({
+      kind: "anomaly",
+      allowed: anomalyDecision.allowed,
+      action: anomalyDecision.action,
+      checkId: anomalyDecision.checkId,
+      severity: anomalyDecision.action === "warn" ? "warn" : "critical",
+      score: anomalyDecision.score,
+      fingerprint: anomalyDecision.fingerprint,
+      reasonCodes: anomalyDecision.reasonCodes,
+      payload: {
+        threshold: anomalyDecision.threshold,
+        retryAfterMs: anomalyDecision.retryAfterMs,
+      },
     });
   }
   if (!anomalyDecision.allowed) {
