@@ -9,12 +9,14 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "../../utils/directive-tags.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { resolveGatewayAbuseQuotaRpcKey } from "../abuse-quota.js";
 import {
   abortChatRunById,
   abortChatRunsForSessionKey,
@@ -839,6 +841,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         agentId,
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
+      const abuseAuditKey = resolveGatewayAbuseQuotaRpcKey({
+        method: "chat.send",
+        client,
+        requestParams: p as unknown as Record<string, unknown>,
+      });
       const finalReplyParts: string[] = [];
       const dispatcher = createReplyDispatcher({
         ...prefixOptions,
@@ -868,6 +875,10 @@ export const chatHandlers: GatewayRequestHandlers = {
           images: parsedImages.length > 0 ? parsedImages : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
+            registerAgentRunContext(runId, {
+              abuseAuditKey,
+              abuseAuditMethod: "chat.send",
+            });
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
             const wantsToolEvents = hasGatewayClientCap(
               client?.connect?.caps,

@@ -15,6 +15,8 @@ export type AgentRunContext = {
   sessionKey?: string;
   verboseLevel?: VerboseLevel;
   isHeartbeat?: boolean;
+  abuseAuditKey?: string;
+  abuseAuditMethod?: string;
 };
 
 // Keep per-run counters so streams stay strictly monotonic per runId.
@@ -39,6 +41,12 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
+  }
+  if (context.abuseAuditKey && existing.abuseAuditKey !== context.abuseAuditKey) {
+    existing.abuseAuditKey = context.abuseAuditKey;
+  }
+  if (context.abuseAuditMethod && existing.abuseAuditMethod !== context.abuseAuditMethod) {
+    existing.abuseAuditMethod = context.abuseAuditMethod;
   }
 }
 

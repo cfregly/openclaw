@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
-import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
 import { consumeGatewayAbuseAnomaly } from "./abuse-anomaly.js";
@@ -540,6 +540,11 @@ export async function handleOpenAiHttpRequest(
     prompt,
     sessionKey,
     runId,
+  });
+  registerAgentRunContext(runId, {
+    sessionKey,
+    abuseAuditKey: abuseTupleKey,
+    abuseAuditMethod: "chat.send",
   });
 
   if (!stream) {

@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
@@ -5,6 +7,10 @@ import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
 import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { STATE_DIR } from "../../config/paths.js";
+import {
+  __testing as auditLedgerTesting,
+  queryGatewayAbuseAuditLedger,
+} from "../../gateway/abuse-audit-ledger.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { markdownToSignalTextChunks } from "../../signal/format.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -103,6 +109,7 @@ async function runChunkedWhatsAppDelivery(params?: {
 
 describe("deliverOutboundPayloads", () => {
   beforeEach(() => {
+    auditLedgerTesting.resetGatewayAbuseAuditLedgerState();
     setActivePluginRegistry(defaultRegistry);
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
@@ -120,6 +127,8 @@ describe("deliverOutboundPayloads", () => {
   });
 
   afterEach(() => {
+    auditLedgerTesting.resetGatewayAbuseAuditLedgerState();
+    delete process.env.OPENCLAW_STATE_DIR;
     setActivePluginRegistry(emptyRegistry);
   });
   it("chunks telegram markdown and passes through accountId", async () => {
@@ -770,6 +779,59 @@ describe("deliverOutboundPayloads", () => {
       }),
       expect.objectContaining({ channelId: "whatsapp" }),
     );
+  });
+
+  it("records extension_event audit rows for outbound success and error", async () => {
+    process.env.OPENCLAW_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ext-audit-"));
+    const cfg: OpenClawConfig = {
+      gateway: {
+        abuse: {
+          auditLedger: {
+            mode: "observe",
+            retentionDays: 14,
+            maxRecords: 100,
+            redactPayloads: false,
+          },
+        },
+      },
+    };
+    const sendWhatsApp = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })
+      .mockRejectedValueOnce(new Error("downstream failed"));
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+      sessionKey: "agent:main:main",
+    });
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello again" }],
+      deps: { sendWhatsApp },
+      sessionKey: "agent:main:main",
+      bestEffort: true,
+    });
+
+    const rows = queryGatewayAbuseAuditLedger({
+      kind: "extension_event",
+      channel: "whatsapp",
+      limit: 10,
+    });
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    const successRow = rows.find((row) => row.action === "delivered");
+    const errorRow = rows.find((row) => row.action === "error");
+    expect(successRow?.allowed).toBe(true);
+    expect(successRow?.tool).toBe("whatsapp");
+    expect(errorRow?.allowed).toBe(false);
+    expect(errorRow?.reasonCodes).toContain("outbound_delivery_error");
+    const errorPayload = errorRow?.payload as Record<string, unknown>;
+    expect(errorPayload?.error).toBe("downstream failed");
   });
 });
 

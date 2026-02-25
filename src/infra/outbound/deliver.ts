@@ -18,6 +18,8 @@ import {
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
+import { recordGatewayAbuseAuditEvent } from "../../gateway/abuse-audit-ledger.js";
+import { resolveGatewayAbuseConfig } from "../../gateway/abuse-config.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
@@ -188,6 +190,37 @@ function createChannelOutboundContextBase(
     silent: params.silent,
     mediaLocalRoots: params.mediaLocalRoots,
   };
+}
+
+function normalizeAuditPart(value: string | undefined, fallback: string): string {
+  if (!value) {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : fallback;
+}
+
+function buildExtensionAuditKey(params: {
+  channel: Exclude<OutboundChannel, "none">;
+  accountId?: string;
+  sessionKey?: string;
+  agentId?: string;
+}): string {
+  const sessionKey = params.sessionKey?.trim();
+  const actor = sessionKey
+    ? `session:${sessionKey}`
+    : params.agentId?.trim()
+      ? `agent:${params.agentId.trim()}`
+      : `channel:${params.channel}`;
+  return [
+    `method=send`,
+    `actor=${normalizeAuditPart(actor, "unknown-actor")}`,
+    `device=none`,
+    `ip=none`,
+    `session=${normalizeAuditPart(sessionKey, "none")}`,
+    `channel=${normalizeAuditPart(params.channel, "none")}`,
+    `account=${normalizeAuditPart(params.accountId, "none")}`,
+  ].join("|");
 }
 
 const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
@@ -447,6 +480,49 @@ async function deliverOutboundPayloadsCore(
   });
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.sessionKey;
+  const auditLedgerConfig = resolveGatewayAbuseConfig(cfg).auditLedger;
+  const extensionAuditKey = buildExtensionAuditKey({
+    channel,
+    accountId,
+    sessionKey: sessionKeyForInternalHooks,
+    agentId: params.agentId ?? params.mirror?.agentId,
+  });
+  const recordExtensionAudit = (params: {
+    allowed: boolean;
+    action: "delivered" | "error";
+    reasonCode: "outbound_delivery_success" | "outbound_delivery_error";
+    payloadSummary: NormalizedOutboundPayload;
+    messageId?: string;
+    deliveryCount?: number;
+    error?: string;
+  }) => {
+    if (auditLedgerConfig.mode === "off") {
+      return;
+    }
+    recordGatewayAbuseAuditEvent({
+      kind: "extension_event",
+      key: extensionAuditKey,
+      method: "send",
+      tool: channel,
+      allowed: params.allowed,
+      action: params.action,
+      checkId: "gateway.abuse.audit.extension_event",
+      severity: params.allowed ? undefined : "warn",
+      reasonCodes: [params.reasonCode, `channel_${channel}`],
+      payload: {
+        channel,
+        accountId: accountId ?? "none",
+        sessionKey: sessionKeyForInternalHooks,
+        mediaCount: params.payloadSummary.mediaUrls.length,
+        textBytes: Buffer.byteLength(params.payloadSummary.text, "utf-8"),
+        hasChannelData: Boolean(params.payloadSummary.channelData),
+        messageId: params.messageId,
+        deliveryCount: params.deliveryCount,
+        error: params.error,
+      },
+      auditConfig: auditLedgerConfig,
+    });
+  };
   for (const payload of normalizedPayloads) {
     const payloadSummary: NormalizedOutboundPayload = {
       text: payload.text ?? "",
@@ -535,6 +611,14 @@ async function deliverOutboundPayloadsCore(
           content: payloadSummary.text,
           messageId: delivery.messageId,
         });
+        recordExtensionAudit({
+          allowed: true,
+          action: "delivered",
+          reasonCode: "outbound_delivery_success",
+          payloadSummary,
+          messageId: delivery.messageId,
+          deliveryCount: 1,
+        });
         continue;
       }
       if (payloadSummary.mediaUrls.length === 0) {
@@ -549,6 +633,14 @@ async function deliverOutboundPayloadsCore(
           success: results.length > beforeCount,
           content: payloadSummary.text,
           messageId,
+        });
+        recordExtensionAudit({
+          allowed: true,
+          action: "delivered",
+          reasonCode: "outbound_delivery_success",
+          payloadSummary,
+          messageId,
+          deliveryCount: Math.max(0, results.length - beforeCount),
         });
         continue;
       }
@@ -574,11 +666,27 @@ async function deliverOutboundPayloadsCore(
         content: payloadSummary.text,
         messageId: lastMessageId,
       });
+      recordExtensionAudit({
+        allowed: true,
+        action: "delivered",
+        reasonCode: "outbound_delivery_success",
+        payloadSummary,
+        messageId: lastMessageId,
+        deliveryCount: payloadSummary.mediaUrls.length,
+      });
     } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
       emitMessageSent({
         success: false,
         content: payloadSummary.text,
-        error: err instanceof Error ? err.message : String(err),
+        error: errorMessage,
+      });
+      recordExtensionAudit({
+        allowed: false,
+        action: "error",
+        reasonCode: "outbound_delivery_error",
+        payloadSummary,
+        error: errorMessage,
       });
       if (!params.bestEffort) {
         throw err;
