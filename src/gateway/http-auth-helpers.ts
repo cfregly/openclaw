@@ -31,5 +31,5 @@ export async function authorizeGatewayBearerRequestOrReply(params: {
     sendGatewayAuthFailure(params.res, authResult);
     return undefined;
   }
-  return authResult;
+  return authResult as GatewayHttpAuthorizedResult;
 }
