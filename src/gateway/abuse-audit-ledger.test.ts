@@ -56,7 +56,15 @@ describe("gateway abuse audit ledger", () => {
     });
     recordGatewayAbuseAuditEvent({
       kind: "tool_event",
-      key: "method=chat.send|actor=actor-a|device=d1|ip=10.0.0.1|session=s1|channel=telegram|account=acct-a",
+      key: buildGatewayAbuseTupleKey({
+        method: "chat.send",
+        actor: "actor-a",
+        device: "d1",
+        ip: "10.0.0.1",
+        session: "s1",
+        channel: "telegram",
+        account: "acct-a",
+      }),
       runId: "run-1",
       tool: "read",
       action: "result",

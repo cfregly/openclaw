@@ -9,6 +9,7 @@ import {
   __testing as auditLedgerTesting,
   queryGatewayAbuseAuditLedger,
 } from "./abuse-audit-ledger.js";
+import { buildGatewayAbuseTupleKey } from "./abuse-tuple-key.js";
 import {
   createAgentEventHandler,
   createChatRunState,
@@ -382,8 +383,15 @@ describe("agent event handler", () => {
     registerAgentRunContext("run-tool-audit", {
       sessionKey: "session-audit",
       verboseLevel: "off",
-      abuseAuditKey:
-        "method=chat.send|actor=actor-1|device=device-1|ip=10.0.0.1|session=session-audit|channel=webchat|account=none",
+      abuseAuditKey: buildGatewayAbuseTupleKey({
+        method: "chat.send",
+        actor: "actor-1",
+        device: "device-1",
+        ip: "10.0.0.1",
+        session: "session-audit",
+        channel: "webchat",
+        account: "none",
+      }),
       abuseAuditMethod: "chat.send",
     });
     toolEventRecipients.add("run-tool-audit", "conn-audit");

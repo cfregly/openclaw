@@ -20,6 +20,7 @@ import {
 import type { sendMessageDiscord } from "../../discord/send.js";
 import { recordGatewayAbuseAuditEvent } from "../../gateway/abuse-audit-ledger.js";
 import { resolveGatewayAbuseConfig } from "../../gateway/abuse-config.js";
+import { buildGatewayAbuseTupleKey } from "../../gateway/abuse-tuple-key.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
@@ -212,15 +213,15 @@ function buildExtensionAuditKey(params: {
     : params.agentId?.trim()
       ? `agent:${params.agentId.trim()}`
       : `channel:${params.channel}`;
-  return [
-    `method=send`,
-    `actor=${normalizeAuditPart(actor, "unknown-actor")}`,
-    `device=none`,
-    `ip=none`,
-    `session=${normalizeAuditPart(sessionKey, "none")}`,
-    `channel=${normalizeAuditPart(params.channel, "none")}`,
-    `account=${normalizeAuditPart(params.accountId, "none")}`,
-  ].join("|");
+  return buildGatewayAbuseTupleKey({
+    method: "send",
+    actor: normalizeAuditPart(actor, "unknown-actor"),
+    device: "none",
+    ip: "none",
+    session: normalizeAuditPart(sessionKey, "none"),
+    channel: normalizeAuditPart(params.channel, "none"),
+    account: normalizeAuditPart(params.accountId, "none"),
+  });
 }
 
 const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
