@@ -1,3 +1,11 @@
+import { loadConfig } from "../config/config.js";
+import type { ResolvedGatewayAbuseQuotaConfig } from "./abuse-config.js";
+import { resolveGatewayAbuseConfig } from "./abuse-config.js";
+import {
+  consumeGatewayAbuseQuota,
+  isGatewayAbuseQuotaRpcMethod,
+  resolveGatewayAbuseQuotaRpcKey,
+} from "./abuse-quota.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForMethod } from "./method-scopes.js";
@@ -95,13 +103,59 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
 };
 
 export async function handleGatewayRequest(
-  opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
+  opts: GatewayRequestOptions & {
+    extraHandlers?: GatewayRequestHandlers;
+    abuseQuotaConfig?: ResolvedGatewayAbuseQuotaConfig;
+  },
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context } = opts;
   const authError = authorizeGatewayMethod(req.method, client);
   if (authError) {
     respond(false, undefined, authError);
     return;
+  }
+  const requestParams = (req.params ?? {}) as Record<string, unknown>;
+  if (isGatewayAbuseQuotaRpcMethod(req.method)) {
+    const quotaConfig = opts.abuseQuotaConfig ?? resolveGatewayAbuseConfig(loadConfig()).quota;
+    const budget = consumeGatewayAbuseQuota({
+      key: resolveGatewayAbuseQuotaRpcKey({
+        method: req.method,
+        client,
+        requestParams,
+      }),
+      quotaConfig,
+    });
+    if (budget.observed) {
+      const windowLabel = budget.windowMs ? `${Math.ceil(budget.windowMs / 1000)}s` : "mixed";
+      const limitLabel = budget.limit ? String(budget.limit) : "mixed";
+      context.logGateway.warn(
+        `gateway abuse quota observed method=${req.method} mode=${budget.mode} scope=${budget.scope} limit=${limitLabel} window=${windowLabel} retryAfterMs=${budget.retryAfterMs} key=${budget.key}`,
+      );
+    }
+    if (!budget.allowed) {
+      const limitLabel =
+        budget.limit && budget.windowMs
+          ? `${budget.limit} per ${Math.ceil(budget.windowMs / 1000)}s`
+          : "multiple windows";
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `rate limit exceeded for ${req.method}; retry after ${Math.ceil(budget.retryAfterMs / 1000)}s`,
+          {
+            retryable: true,
+            retryAfterMs: budget.retryAfterMs,
+            details: {
+              method: req.method,
+              scope: budget.scope,
+              limit: limitLabel,
+            },
+          },
+        ),
+      );
+      return;
+    }
   }
   if (CONTROL_PLANE_WRITE_METHODS.has(req.method)) {
     const budget = consumeControlPlaneWriteBudget({ client });
@@ -140,7 +194,7 @@ export async function handleGatewayRequest(
   }
   await handler({
     req,
-    params: (req.params ?? {}) as Record<string, unknown>,
+    params: requestParams,
     client,
     isWebchatConnect,
     respond,

@@ -133,6 +133,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   testTailscaleWhois.value = null;
   testState.gatewayBind = undefined;
   testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
+  testState.gatewayAbuse = undefined;
   testState.gatewayControlUi = undefined;
   testState.hooksConfig = undefined;
   testState.canvasHostPort = undefined;
