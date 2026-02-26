@@ -192,6 +192,36 @@ If more than one person can DM your bot:
 - **Runtime expectation drift** (for example `tools.exec.host="sandbox"` while sandbox mode is off, which runs directly on the gateway host).
 - **Model hygiene** (warn when configured models look legacy; not a hard block).
 
+## Gateway abuse controls (`gateway.abuse.*`)
+
+OpenClaw includes a layered gateway abuse-defense surface for post-auth traffic:
+
+- `gateway.abuse.quota`: burst + sustained per-tuple request quotas.
+- `gateway.abuse.anomaly`: semantic risk scoring for suspicious payload patterns.
+- `gateway.abuse.correlation`: cross-identity/cross-IP campaign correlation scoring.
+- `gateway.abuse.incident`: incident lifecycle records + optional auto-containment TTLs.
+- `gateway.abuse.auditLedger`: durable abuse evidence ledger for request/anomaly/quota/correlation/incident events.
+
+These controls are intentionally additive:
+
+- They do **not** replace existing auth/websocket/webhook/per-sender throttles.
+- They harden post-auth gateway abuse handling on top of existing ingress controls.
+
+### Recommended rollout order
+
+Start conservative and tighten over time:
+
+1. `observe` mode for all abuse controls (`quota`, `anomaly`, `correlation`, `incident`, `auditLedger`).
+2. Tune thresholds/windows from observed traffic and false-positive review.
+3. Move `quota` and `anomaly` to `enforce`.
+4. Enable `incident.autoContainment` with short TTLs, then tune upward as confidence improves.
+
+### Coverage notes
+
+- Method traffic: `chat.send`, `send`, and `node.invoke`.
+- HTTP equivalents: `/v1/chat/completions` and `/v1/responses`.
+- Audit fan-in includes request/anomaly/quota/correlation/incident decisions plus tool-event/extension-channel evidence.
+
 If you run `--deep`, OpenClaw also attempts a best-effort live Gateway probe.
 
 ## Credential storage map
