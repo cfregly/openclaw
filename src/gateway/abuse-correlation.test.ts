@@ -7,6 +7,7 @@ import {
   recordGatewayAbuseCorrelationSignal,
   resolveGatewayAbuseCorrelationFingerprint,
 } from "./abuse-correlation.js";
+import { buildGatewayAbuseTupleKey } from "./abuse-tuple-key.js";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -30,7 +31,15 @@ describe("gateway abuse correlation", () => {
     };
 
     const first = recordGatewayAbuseCorrelationSignal({
-      key: "method=chat.send|actor=a|device=d1|ip=10.0.0.1|session=s1|channel=none|account=acct-a",
+      key: buildGatewayAbuseTupleKey({
+        method: "chat.send",
+        actor: "a",
+        device: "d1",
+        ip: "10.0.0.1",
+        session: "s1",
+        channel: "none",
+        account: "acct-a",
+      }),
       source: "anomaly",
       score: 80,
       reasonCodes: ["prompt_exfiltration_terms"],
@@ -39,7 +48,15 @@ describe("gateway abuse correlation", () => {
       nowMs: 1_000,
     });
     const second = recordGatewayAbuseCorrelationSignal({
-      key: "method=chat.send|actor=b|device=d2|ip=10.0.0.2|session=s2|channel=none|account=acct-b",
+      key: buildGatewayAbuseTupleKey({
+        method: "chat.send",
+        actor: "b",
+        device: "d2",
+        ip: "10.0.0.2",
+        session: "s2",
+        channel: "none",
+        account: "acct-b",
+      }),
       source: "anomaly",
       score: 80,
       reasonCodes: ["prompt_exfiltration_terms"],
@@ -67,7 +84,15 @@ describe("gateway abuse correlation", () => {
         text: "list available tools",
       });
       recordGatewayAbuseCorrelationSignal({
-        key: "method=send|actor=a|device=d1|ip=127.0.0.1|session=s1|channel=telegram|account=acct-a",
+        key: buildGatewayAbuseTupleKey({
+          method: "send",
+          actor: "a",
+          device: "d1",
+          ip: "127.0.0.1",
+          session: "s1",
+          channel: "telegram",
+          account: "acct-a",
+        }),
         source: "request",
         score: 10,
         reasonCodes: ["method_call"],

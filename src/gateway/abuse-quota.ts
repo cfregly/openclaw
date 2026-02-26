@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import type { GatewayAbuseMode } from "../config/config.js";
 import type { ResolvedGatewayAbuseQuotaConfig } from "./abuse-config.js";
+import { buildGatewayAbuseTupleKey } from "./abuse-tuple-key.js";
 import { resolveClientIp } from "./net.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
@@ -73,15 +74,15 @@ export function resolveGatewayAbuseQuotaRpcKey(params: {
   const sessionKey = normalizePart(requestParams.sessionKey, "none");
   const channel = normalizePart(requestParams.channel, "none");
   const accountId = normalizePart(requestParams.accountId, "none");
-  return [
-    `method=${normalizePart(params.method, "unknown-method")}`,
-    `actor=${actorId}`,
-    `device=${deviceId}`,
-    `ip=${clientIp}`,
-    `session=${sessionKey}`,
-    `channel=${channel}`,
-    `account=${accountId}`,
-  ].join("|");
+  return buildGatewayAbuseTupleKey({
+    method: normalizePart(params.method, "unknown-method"),
+    actor: actorId,
+    device: deviceId,
+    ip: clientIp,
+    session: sessionKey,
+    channel,
+    account: accountId,
+  });
 }
 
 export function resolveGatewayAbuseQuotaHttpKey(params: {
@@ -104,15 +105,15 @@ export function resolveGatewayAbuseQuotaHttpKey(params: {
       allowRealIpFallback: params.allowRealIpFallback,
     }) ?? "unknown-ip";
 
-  return [
-    `method=${normalizePart(params.method, "unknown-method")}`,
-    `actor=${normalizePart(params.actorId, "unknown-actor")}`,
-    `device=${normalizePart(params.deviceId, "none")}`,
-    `ip=${normalizePart(clientIp, "unknown-ip")}`,
-    `session=${normalizePart(params.sessionKey, "none")}`,
-    `channel=${normalizePart(params.channel, "none")}`,
-    `account=${normalizePart(params.accountId, "none")}`,
-  ].join("|");
+  return buildGatewayAbuseTupleKey({
+    method: normalizePart(params.method, "unknown-method"),
+    actor: normalizePart(params.actorId, "unknown-actor"),
+    device: normalizePart(params.deviceId, "none"),
+    ip: normalizePart(clientIp, "unknown-ip"),
+    session: normalizePart(params.sessionKey, "none"),
+    channel: normalizePart(params.channel, "none"),
+    account: normalizePart(params.accountId, "none"),
+  });
 }
 
 export function consumeGatewayAbuseQuota(params: {

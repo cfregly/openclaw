@@ -19,6 +19,7 @@ import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { __testing as anomalyTesting } from "./abuse-anomaly.js";
+import { __testing as auditLedgerTesting } from "./abuse-audit-ledger.js";
 import { __testing as correlationTesting } from "./abuse-correlation.js";
 import { __testing as incidentTesting } from "./abuse-incident.js";
 import { __testing as quotaTesting } from "./abuse-quota.js";
@@ -162,6 +163,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   embeddedRunMock.waitCalls = [];
   embeddedRunMock.waitResults.clear();
   anomalyTesting.resetGatewayAbuseAnomalyState();
+  auditLedgerTesting.resetGatewayAbuseAuditLedgerState();
   correlationTesting.resetGatewayAbuseCorrelationState();
   incidentTesting.resetGatewayAbuseIncidentState();
   quotaTesting.resetGatewayAbuseQuotaState();

@@ -5,9 +5,11 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   __testing,
   getActiveGatewayAbuseContainment,
+  getGatewayAbuseIncidentSnapshot,
   recordGatewayAbuseIncidentSignal,
   transitionGatewayAbuseIncident,
 } from "./abuse-incident.js";
+import { buildGatewayAbuseTupleKey } from "./abuse-tuple-key.js";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -18,8 +20,15 @@ describe("gateway abuse incidents", () => {
   });
 
   it("creates incident records and applies auto-containment in enforce mode", () => {
-    const key =
-      "method=chat.send|actor=a|device=d1|ip=10.0.0.1|session=s1|channel=none|account=acct-a";
+    const key = buildGatewayAbuseTupleKey({
+      method: "chat.send",
+      actor: "a",
+      device: "d1",
+      ip: "10.0.0.1",
+      session: "s1",
+      channel: "none",
+      account: "acct-a",
+    });
     const decision = recordGatewayAbuseIncidentSignal({
       key,
       source: "anomaly",
@@ -51,8 +60,15 @@ describe("gateway abuse incidents", () => {
   });
 
   it("expires containment after TTL and supports operator transitions", () => {
-    const key =
-      "method=send|actor=a|device=d1|ip=10.0.0.1|session=s1|channel=telegram|account=acct-a";
+    const key = buildGatewayAbuseTupleKey({
+      method: "send",
+      actor: "a",
+      device: "d1",
+      ip: "10.0.0.1",
+      session: "s1",
+      channel: "telegram",
+      account: "acct-a",
+    });
     const created = recordGatewayAbuseIncidentSignal({
       key,
       source: "quota",
@@ -101,13 +117,80 @@ describe("gateway abuse incidents", () => {
     expect(resolved?.state).toBe("resolved");
   });
 
+  it("prunes resolved incidents beyond retentionDays", () => {
+    const incidentConfig = {
+      mode: "observe" as const,
+      autoContainment: {
+        enabled: false,
+        minSeverity: "critical" as const,
+        ttlMs: 60_000,
+      },
+      retentionDays: 1,
+    };
+    const old = recordGatewayAbuseIncidentSignal({
+      key: buildGatewayAbuseTupleKey({
+        method: "chat.send",
+        actor: "a",
+        device: "d1",
+        ip: "10.0.0.1",
+        session: "s1",
+        channel: "none",
+        account: "none",
+      }),
+      source: "anomaly",
+      severity: "warn",
+      checkId: "gateway.abuse.anomaly.warning",
+      incidentConfig,
+      nowMs: 0,
+    });
+    expect(old?.incidentId).toBeTruthy();
+
+    transitionGatewayAbuseIncident({
+      incidentId: old!.incidentId,
+      action: "resolve",
+      nowMs: 1_000,
+      incidentConfig,
+    });
+
+    recordGatewayAbuseIncidentSignal({
+      key: buildGatewayAbuseTupleKey({
+        method: "send",
+        actor: "b",
+        device: "d2",
+        ip: "10.0.0.2",
+        session: "s2",
+        channel: "telegram",
+        account: "acct-b",
+      }),
+      source: "quota",
+      severity: "warn",
+      checkId: "gateway.abuse.quota.observed",
+      incidentConfig,
+      nowMs: 172_800_000,
+    });
+
+    const snapshot = getGatewayAbuseIncidentSnapshot({
+      nowMs: 172_800_000,
+      incidentConfig,
+    });
+    expect(snapshot.incidents.map((incident) => incident.id)).not.toContain(old!.incidentId);
+  });
+
   it("persists incident state under OPENCLAW_STATE_DIR", async () => {
     await withTempDir("openclaw-incidents-", async (stateDir) => {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       __testing.resetGatewayAbuseIncidentState();
 
       const decision = recordGatewayAbuseIncidentSignal({
-        key: "method=chat.send|actor=a|device=d1|ip=127.0.0.1|session=s1|channel=none|account=none",
+        key: buildGatewayAbuseTupleKey({
+          method: "chat.send",
+          actor: "a",
+          device: "d1",
+          ip: "127.0.0.1",
+          session: "s1",
+          channel: "none",
+          account: "none",
+        }),
         source: "anomaly",
         severity: "warn",
         checkId: "gateway.abuse.anomaly.warning",

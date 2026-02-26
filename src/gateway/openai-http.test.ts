@@ -463,6 +463,63 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     );
   });
 
+  it("does not allow quota bypass by rotating the request user field", async () => {
+    testState.gatewayAuth = {
+      mode: "token",
+      token: "secret",
+    };
+    testState.gatewayAbuse = {
+      quota: {
+        mode: "enforce",
+        burstLimit: 1,
+        burstWindowMs: 60_000,
+        sustainedLimit: 100,
+        sustainedWindowMs: 600_000,
+      },
+    };
+
+    await withGatewayServer(
+      async ({ port }) => {
+        const first = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer secret",
+          },
+          body: JSON.stringify({
+            model: "openclaw",
+            user: "alice",
+            messages: [{ role: "user", content: "hi" }],
+          }),
+        });
+        expect(first.status).toBe(200);
+        await first.text();
+
+        const second = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer secret",
+          },
+          body: JSON.stringify({
+            model: "openclaw",
+            user: "bob",
+            messages: [{ role: "user", content: "hi again" }],
+          }),
+        });
+        expect(second.status).toBe(429);
+        expect(second.headers.get("retry-after")).toBeTruthy();
+      },
+      {
+        serverOptions: {
+          host: "127.0.0.1",
+          controlUiEnabled: false,
+          openAiChatCompletionsEnabled: true,
+        },
+      },
+    );
+  });
+
   it("returns 429 for semantic anomaly when gateway.abuse.anomaly is enforce", async () => {
     testState.gatewayAuth = {
       mode: "token",

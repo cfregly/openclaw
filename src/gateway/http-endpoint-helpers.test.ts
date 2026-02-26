@@ -50,7 +50,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
   });
 
   it("returns undefined when auth fails", async () => {
-    vi.mocked(authorizeGatewayBearerRequestOrReply).mockResolvedValue(false);
+    vi.mocked(authorizeGatewayBearerRequestOrReply).mockResolvedValue(undefined);
     const result = await handleGatewayPostJsonEndpoint(
       {
         url: "/v1/ok",
@@ -64,7 +64,10 @@ describe("handleGatewayPostJsonEndpoint", () => {
   });
 
   it("returns body when auth succeeds and JSON parsing succeeds", async () => {
-    vi.mocked(authorizeGatewayBearerRequestOrReply).mockResolvedValue(true);
+    vi.mocked(authorizeGatewayBearerRequestOrReply).mockResolvedValue({
+      ok: true,
+      method: "token",
+    });
     vi.mocked(readJsonBodyOrError).mockResolvedValue({ hello: "world" });
     const result = await handleGatewayPostJsonEndpoint(
       {
@@ -75,6 +78,9 @@ describe("handleGatewayPostJsonEndpoint", () => {
       {} as unknown as ServerResponse,
       { pathname: "/v1/ok", auth: {} as unknown as ResolvedGatewayAuth, maxBodyBytes: 123 },
     );
-    expect(result).toEqual({ body: { hello: "world" } });
+    expect(result).toEqual({
+      body: { hello: "world" },
+      authResult: { ok: true, method: "token" },
+    });
   });
 });

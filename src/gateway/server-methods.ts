@@ -4,8 +4,10 @@ import {
   isGatewayAbuseAnomalyRpcMethod,
   resolveGatewayAbuseAnomalyRpcInput,
 } from "./abuse-anomaly.js";
+import { recordGatewayAbuseAuditEvent } from "./abuse-audit-ledger.js";
 import type {
   ResolvedGatewayAbuseAnomalyConfig,
+  ResolvedGatewayAbuseAuditLedgerConfig,
   ResolvedGatewayAbuseCorrelationConfig,
   ResolvedGatewayAbuseIncidentConfig,
   ResolvedGatewayAbuseQuotaConfig,
@@ -127,6 +129,7 @@ export async function handleGatewayRequest(
     anomalyConfig?: ResolvedGatewayAbuseAnomalyConfig;
     correlationConfig?: ResolvedGatewayAbuseCorrelationConfig;
     incidentConfig?: ResolvedGatewayAbuseIncidentConfig;
+    auditLedgerConfig?: ResolvedGatewayAbuseAuditLedgerConfig;
   },
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context } = opts;
@@ -143,6 +146,7 @@ export async function handleGatewayRequest(
   const anomalyConfig = opts.anomalyConfig ?? resolvedAbuseConfig?.anomaly;
   const correlationConfig = opts.correlationConfig ?? resolvedAbuseConfig?.correlation;
   const incidentConfig = opts.incidentConfig ?? resolvedAbuseConfig?.incident;
+  const auditLedgerConfig = opts.auditLedgerConfig ?? resolvedAbuseConfig?.auditLedger;
   const abuseScopedMethod =
     isGatewayAbuseAnomalyRpcMethod(req.method) || isGatewayAbuseQuotaRpcMethod(req.method);
   const abuseTupleKey = abuseScopedMethod
@@ -160,6 +164,42 @@ export async function handleGatewayRequest(
     : undefined;
   let requestCorrelationFingerprint: string | undefined;
   let requestCorrelationRecorded = false;
+
+  const recordAudit = (params: {
+    kind: "request" | "anomaly" | "quota" | "correlation" | "incident" | "containment";
+    allowed?: boolean;
+    action?: string;
+    checkId?: string;
+    severity?: "warn" | "critical";
+    score?: number;
+    fingerprint?: string;
+    clusterId?: string;
+    incidentId?: string;
+    reasonCodes?: string[];
+    payload?: unknown;
+    tool?: string;
+  }) => {
+    if (!abuseTupleKey || !auditLedgerConfig) {
+      return;
+    }
+    recordGatewayAbuseAuditEvent({
+      kind: params.kind,
+      key: abuseTupleKey,
+      method: req.method,
+      allowed: params.allowed,
+      action: params.action,
+      checkId: params.checkId,
+      severity: params.severity,
+      score: params.score,
+      fingerprint: params.fingerprint,
+      clusterId: params.clusterId,
+      incidentId: params.incidentId,
+      reasonCodes: params.reasonCodes,
+      payload: params.payload,
+      tool: params.tool,
+      auditConfig: auditLedgerConfig,
+    });
+  };
 
   const recordIncident = (params: {
     source: "anomaly" | "quota" | "correlation";
@@ -183,14 +223,42 @@ export async function handleGatewayRequest(
     if (!decision) {
       return;
     }
+    recordAudit({
+      kind: "incident",
+      checkId: params.checkId,
+      severity: params.severity,
+      incidentId: decision.incidentId,
+      action: decision.state,
+      reasonCodes: params.reasonCodes,
+      payload: {
+        source: params.source,
+        autoContained: decision.autoContained,
+      },
+    });
     context.logGateway.warn(
       `gateway abuse incident signal source=${params.source} severity=${params.severity} incidentId=${decision.incidentId} state=${decision.state} autoContained=${decision.autoContained ? "yes" : "no"} checkId=${params.checkId}`,
     );
   };
 
   if (abuseTupleKey && incidentConfig) {
-    const containment = getActiveGatewayAbuseContainment({ key: abuseTupleKey });
+    const containment = getActiveGatewayAbuseContainment({
+      key: abuseTupleKey,
+      incidentConfig,
+    });
     if (containment.active) {
+      recordAudit({
+        kind: "containment",
+        allowed: false,
+        action: "block",
+        checkId: "gateway.abuse.incident.containment",
+        severity: "critical",
+        incidentId: containment.incidentId,
+        reasonCodes: ["active_containment"],
+        payload: {
+          retryAfterMs: containment.retryAfterMs,
+          scope: containment.scopeKey,
+        },
+      });
       context.logGateway.warn(
         `gateway abuse containment active method=${req.method} incidentId=${containment.incidentId ?? "unknown"} retryAfterMs=${containment.retryAfterMs} scope=${containment.scopeKey}`,
       );
@@ -246,6 +314,21 @@ export async function handleGatewayRequest(
       reasonCodes: params.reasonCodes,
       clusterId: decision.clusterId,
     });
+    recordAudit({
+      kind: "correlation",
+      allowed: true,
+      action: decision.severity,
+      checkId: decision.checkId,
+      severity: decision.severity === "critical" ? "critical" : "warn",
+      score: decision.clusterScore,
+      fingerprint: decision.fingerprint,
+      clusterId: decision.clusterId,
+      reasonCodes: params.reasonCodes,
+      payload: {
+        fanout: decision.fanout,
+        threshold: decision.threshold,
+      },
+    });
   };
 
   const maybeRecordRequestCorrelation = () => {
@@ -256,6 +339,18 @@ export async function handleGatewayRequest(
       method: req.method,
       text: anomalyInput.text,
       toolName: anomalyInput.toolName,
+    });
+    recordAudit({
+      kind: "request",
+      allowed: true,
+      action: "allow",
+      checkId: "gateway.abuse.audit.request",
+      fingerprint: requestCorrelationFingerprint,
+      reasonCodes: ["method_call"],
+      tool: anomalyInput.toolName,
+      payload: {
+        method: req.method,
+      },
     });
     recordCorrelation({
       source: "request",
@@ -283,6 +378,20 @@ export async function handleGatewayRequest(
         severity: anomalyDecision.action === "warn" ? "warn" : "critical",
         checkId: anomalyDecision.checkId,
         reasonCodes: anomalyDecision.reasonCodes,
+      });
+      recordAudit({
+        kind: "anomaly",
+        allowed: anomalyDecision.allowed,
+        action: anomalyDecision.action,
+        checkId: anomalyDecision.checkId,
+        severity: anomalyDecision.action === "warn" ? "warn" : "critical",
+        score: anomalyDecision.score,
+        fingerprint: anomalyDecision.fingerprint,
+        reasonCodes: anomalyDecision.reasonCodes,
+        payload: {
+          threshold: anomalyDecision.threshold,
+          retryAfterMs: anomalyDecision.retryAfterMs,
+        },
       });
       if (anomalyDecision.fingerprint) {
         recordCorrelation({
@@ -336,6 +445,20 @@ export async function handleGatewayRequest(
         severity: budget.allowed ? "warn" : "critical",
         checkId: "gateway.abuse.quota.observed",
         reasonCodes: [`quota_${budget.scope}`],
+      });
+      recordAudit({
+        kind: "quota",
+        allowed: budget.allowed,
+        action: budget.allowed ? "observe" : "enforce",
+        checkId: "gateway.abuse.quota.observed",
+        severity: budget.allowed ? "warn" : "critical",
+        score: budget.limit,
+        reasonCodes: [`quota_${budget.scope}`],
+        payload: {
+          retryAfterMs: budget.retryAfterMs,
+          scope: budget.scope,
+          windowMs: budget.windowMs,
+        },
       });
       recordCorrelation({
         source: "quota",

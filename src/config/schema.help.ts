@@ -142,7 +142,7 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.abuse.incident.retentionDays":
     "Default retention horizon (days) for incident timelines and linked evidence. Set this to satisfy audit and post-incident review requirements.",
   "gateway.abuse.auditLedger":
-    "Unified tool-use and exfiltration audit-ledger controls shared across core and extension channels. Use this section to govern ledger mode, retention, and redaction behavior.",
+    "Gateway abuse decision audit-ledger controls for request/anomaly/quota/correlation/incident events. Use this section to govern ledger mode, retention, and redaction behavior.",
   "gateway.abuse.auditLedger.mode":
     'Audit-ledger mode: "off" disables storage, "observe" records findings without enforcement coupling, and "enforce" enables policy hooks that depend on ledger outcomes.',
   "gateway.abuse.auditLedger.retentionDays":

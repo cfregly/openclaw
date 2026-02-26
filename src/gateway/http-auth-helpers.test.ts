@@ -44,9 +44,9 @@ describe("authorizeGatewayBearerRequestOrReply", () => {
       reason: "token_missing",
     });
 
-    const ok = await authorizeGatewayBearerRequestOrReply(makeAuthorizeParams());
+    const authResult = await authorizeGatewayBearerRequestOrReply(makeAuthorizeParams());
 
-    expect(ok).toBe(false);
+    expect(authResult).toBeUndefined();
     expect(vi.mocked(authorizeHttpGatewayConnect)).toHaveBeenCalledWith(
       expect.objectContaining({
         connectAuth: null,
@@ -59,9 +59,12 @@ describe("authorizeGatewayBearerRequestOrReply", () => {
     vi.mocked(getBearerToken).mockReturnValue("abc");
     vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true, method: "token" });
 
-    const ok = await authorizeGatewayBearerRequestOrReply(makeAuthorizeParams());
+    const authResult = await authorizeGatewayBearerRequestOrReply(makeAuthorizeParams());
 
-    expect(ok).toBe(true);
+    expect(authResult).toEqual({
+      ok: true,
+      method: "token",
+    });
     expect(vi.mocked(authorizeHttpGatewayConnect)).toHaveBeenCalledWith(
       expect.objectContaining({
         connectAuth: { token: "abc", password: "abc" },
