@@ -5,6 +5,7 @@ import path from "node:path";
 import type { GatewayAbuseMode } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ResolvedGatewayAbuseCorrelationConfig } from "./abuse-config.js";
+import { parseGatewayAbuseTupleKey } from "./abuse-tuple-key.js";
 
 type CorrelationSource = "request" | "quota" | "anomaly";
 type CorrelationSeverity = "none" | "warning" | "critical";
@@ -87,42 +88,6 @@ function normalizeText(text: string): string {
 
 function toFingerprint(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
-}
-
-function parseTupleKey(key: string): CorrelationTuple {
-  const defaults: CorrelationTuple = {
-    method: "unknown-method",
-    actor: "unknown-actor",
-    device: "unknown-device",
-    ip: "unknown-ip",
-    session: "none",
-    channel: "none",
-    account: "none",
-  };
-  const parts = key.split("|");
-  for (const part of parts) {
-    const [rawName, ...valueParts] = part.split("=");
-    const value = valueParts.join("=").trim();
-    if (!value) {
-      continue;
-    }
-    if (rawName === "method") {
-      defaults.method = value;
-    } else if (rawName === "actor") {
-      defaults.actor = value;
-    } else if (rawName === "device") {
-      defaults.device = value;
-    } else if (rawName === "ip") {
-      defaults.ip = value;
-    } else if (rawName === "session") {
-      defaults.session = value;
-    } else if (rawName === "channel") {
-      defaults.channel = value;
-    } else if (rawName === "account") {
-      defaults.account = value;
-    }
-  }
-  return defaults;
 }
 
 function ensureLoaded(): void {
@@ -374,7 +339,7 @@ export function recordGatewayAbuseCorrelationSignal(params: {
     source: params.source,
     score: params.score,
     reasonCodes: params.reasonCodes ?? [],
-    tuple: parseTupleKey(params.key),
+    tuple: parseGatewayAbuseTupleKey(params.key),
     weight: resolveSignalWeight({
       source: params.source,
       score: params.score,

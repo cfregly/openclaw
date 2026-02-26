@@ -4,6 +4,7 @@ import path from "node:path";
 import type { GatewayAbuseMode } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ResolvedGatewayAbuseIncidentConfig } from "./abuse-config.js";
+import { buildGatewayAbuseTupleScopeKey, parseGatewayAbuseTupleKey } from "./abuse-tuple-key.js";
 
 export type GatewayAbuseIncidentState = "open" | "investigating" | "contained" | "resolved";
 export type GatewayAbuseIncidentSeverity = "warn" | "critical";
@@ -83,25 +84,8 @@ function resolveStorePath(): string {
 }
 
 function parseTupleScope(key: string): string {
-  const fields = {
-    actor: "unknown-actor",
-    device: "unknown-device",
-    ip: "unknown-ip",
-    session: "none",
-    channel: "none",
-    account: "none",
-  };
-  for (const part of key.split("|")) {
-    const [rawName, ...valueParts] = part.split("=");
-    const value = valueParts.join("=").trim();
-    if (!value) {
-      continue;
-    }
-    if (rawName in fields) {
-      fields[rawName as keyof typeof fields] = value;
-    }
-  }
-  return `actor=${fields.actor}|device=${fields.device}|ip=${fields.ip}|session=${fields.session}|channel=${fields.channel}|account=${fields.account}`;
+  const tuple = parseGatewayAbuseTupleKey(key);
+  return buildGatewayAbuseTupleScopeKey(tuple);
 }
 
 function resolveIncidentScopeKey(params: { tupleScopeKey: string; clusterId?: string }): string {

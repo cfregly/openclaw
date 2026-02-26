@@ -98,4 +98,25 @@ describe("gateway abuse quota", () => {
     expect(key).toContain("actor=user:alice");
     expect(key).toContain("ip=203.0.113.10");
   });
+
+  it("escapes tuple delimiters in computed keys", () => {
+    const req = {
+      socket: { remoteAddress: "127.0.0.1" },
+      headers: {
+        "x-forwarded-for": "203.0.113.99",
+      },
+    } as unknown as import("node:http").IncomingMessage;
+
+    const key = resolveGatewayAbuseQuotaHttpKey({
+      method: "chat.send",
+      req,
+      trustedProxies: ["127.0.0.1"],
+      actorId: "user|alice=admin%",
+      sessionKey: "agent:main:user=alice|prod",
+    });
+
+    expect(key).toContain("actor=user%7Calice%3Dadmin%25");
+    expect(key).toContain("session=agent:main:user%3Dalice%7Cprod");
+    expect(key).not.toContain("actor=user|alice=admin%");
+  });
 });

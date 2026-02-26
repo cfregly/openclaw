@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { ResolvedGatewayAbuseAuditLedgerConfig } from "./abuse-config.js";
+import { parseGatewayAbuseTupleKey } from "./abuse-tuple-key.js";
 
 export type GatewayAbuseAuditKind =
   | "request"
@@ -61,37 +62,6 @@ const auditRecords: GatewayAbuseAuditRecord[] = [];
 
 function resolveStorePath(): string {
   return path.join(resolveStateDir(process.env), "gateway-abuse-audit-ledger.json");
-}
-
-function parseTupleKey(key: string): {
-  method: string;
-  actor: string;
-  device: string;
-  ip: string;
-  session: string;
-  channel: string;
-  account: string;
-} {
-  const result = {
-    method: "unknown-method",
-    actor: "unknown-actor",
-    device: "unknown-device",
-    ip: "unknown-ip",
-    session: "none",
-    channel: "none",
-    account: "none",
-  };
-  for (const part of key.split("|")) {
-    const [rawName, ...valueParts] = part.split("=");
-    const value = valueParts.join("=").trim();
-    if (!value) {
-      continue;
-    }
-    if (rawName in result) {
-      result[rawName as keyof typeof result] = value;
-    }
-  }
-  return result;
 }
 
 function ensureLoaded(): void {
@@ -210,7 +180,7 @@ export function recordGatewayAbuseAuditEvent(params: {
     return undefined;
   }
 
-  const tuple = parseTupleKey(params.key);
+  const tuple = parseGatewayAbuseTupleKey(params.key);
   const record: GatewayAbuseAuditRecord = {
     id: nextId++,
     ts: nowMs,
