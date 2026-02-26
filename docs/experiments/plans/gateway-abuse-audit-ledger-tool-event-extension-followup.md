@@ -21,25 +21,28 @@ This follow-up adds channel/tool instrumentation that is broader and riskier to 
 - extension/outbound fan-in coverage,
 - exfiltration-oriented tool/result evidence.
 
-## Proposed PR Title
+## PR Title
 
-`security(audit): add tool-event and extension fan-in coverage to abuse audit ledger`
+`security(audit): tool-event and extension fan-in coverage for abuse audit ledger`
 
-## Scope
+## Implemented Scope
 
-1. Add `tool_event` ledger rows for agent tool call lifecycle (start/finish/error) with stable run/tool correlation fields.
-2. Capture extension-channel fan-in events at shared seams (plugin adapters/outbound delivery integration points), not per-channel copy/paste handlers.
-3. Persist tool-result metadata in redaction-safe form (`redactPayloads=true` default) with explicit size/byte counters.
-4. Add exfiltration-oriented audit reason codes for suspicious tool/result patterns (high volume, repetitive extraction templates, risky chains).
-5. Expose query filters by tool, channel, run, and incident linkage.
+1. Added `tool_event` ledger rows for agent tool lifecycle phases (`start`/`update`/`result`) with stable run correlation fields.
+2. Captured extension-channel fan-in events at the shared outbound seam (`deliverOutboundPayloadsCore`), not per-channel copy/paste handlers.
+3. Persisted redaction-safe metadata (`toolCallId`, phase, result/partial-result presence + byte estimates) without storing raw tool outputs.
+4. Added query filtering by `runId` for tool-event investigation paths.
+5. Preserved PR-6 decision-event behavior; this PR extends evidence coverage only.
 
 ## Acceptance Criteria
 
 1. `tool_event` records are emitted for targeted core tool streams with deterministic IDs.
-2. Extension/outbound fan-in paths emit audit rows with channel identifiers.
-3. Redaction behavior is test-covered for sensitive tool payload/result fields.
-4. At least 3 exfiltration-focused scenarios are test-covered (volume spike, repeated extraction sequence, risky chain).
-5. Existing PR-6 behavior remains unchanged for decision-event logging and retry semantics.
+2. Extension/outbound fan-in paths emit `extension_event` audit rows with channel identifiers.
+3. Redaction-safe behavior is test-covered for tool payload/result evidence fields.
+4. Existing PR-6 behavior remains unchanged for decision-event logging and retry semantics.
+
+## Deferred Follow-up
+
+1. Exfiltration-oriented heuristic reason codes (volume spike, repeated extraction sequence, risky chains) are deferred to a later iteration.
 
 ## Explicit Non-goals
 
