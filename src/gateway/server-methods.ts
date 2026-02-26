@@ -7,6 +7,7 @@ import {
 import type {
   ResolvedGatewayAbuseAnomalyConfig,
   ResolvedGatewayAbuseCorrelationConfig,
+  ResolvedGatewayAbuseIncidentConfig,
   ResolvedGatewayAbuseQuotaConfig,
 } from "./abuse-config.js";
 import { resolveGatewayAbuseConfig } from "./abuse-config.js";
@@ -14,6 +15,10 @@ import {
   recordGatewayAbuseCorrelationSignal,
   resolveGatewayAbuseCorrelationFingerprint,
 } from "./abuse-correlation.js";
+import {
+  getActiveGatewayAbuseContainment,
+  recordGatewayAbuseIncidentSignal,
+} from "./abuse-incident.js";
 import {
   consumeGatewayAbuseQuota,
   isGatewayAbuseQuotaRpcMethod,
@@ -121,6 +126,7 @@ export async function handleGatewayRequest(
     abuseQuotaConfig?: ResolvedGatewayAbuseQuotaConfig;
     anomalyConfig?: ResolvedGatewayAbuseAnomalyConfig;
     correlationConfig?: ResolvedGatewayAbuseCorrelationConfig;
+    incidentConfig?: ResolvedGatewayAbuseIncidentConfig;
   },
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context } = opts;
@@ -131,11 +137,12 @@ export async function handleGatewayRequest(
   }
   const requestParams = (req.params ?? {}) as Record<string, unknown>;
   const resolvedAbuseConfig =
-    opts.abuseQuotaConfig && opts.anomalyConfig && opts.correlationConfig
+    opts.abuseQuotaConfig && opts.anomalyConfig && opts.correlationConfig && opts.incidentConfig
       ? undefined
       : resolveGatewayAbuseConfig(loadConfig());
   const anomalyConfig = opts.anomalyConfig ?? resolvedAbuseConfig?.anomaly;
   const correlationConfig = opts.correlationConfig ?? resolvedAbuseConfig?.correlation;
+  const incidentConfig = opts.incidentConfig ?? resolvedAbuseConfig?.incident;
   const abuseScopedMethod =
     isGatewayAbuseAnomalyRpcMethod(req.method) || isGatewayAbuseQuotaRpcMethod(req.method);
   const abuseTupleKey = abuseScopedMethod
@@ -153,6 +160,60 @@ export async function handleGatewayRequest(
     : undefined;
   let requestCorrelationFingerprint: string | undefined;
   let requestCorrelationRecorded = false;
+
+  const recordIncident = (params: {
+    source: "anomaly" | "quota" | "correlation";
+    severity: "warn" | "critical";
+    checkId: string;
+    reasonCodes: string[];
+    clusterId?: string;
+  }) => {
+    if (!abuseTupleKey || !incidentConfig) {
+      return;
+    }
+    const decision = recordGatewayAbuseIncidentSignal({
+      key: abuseTupleKey,
+      source: params.source,
+      severity: params.severity,
+      checkId: params.checkId,
+      reasonCodes: params.reasonCodes,
+      clusterId: params.clusterId,
+      incidentConfig,
+    });
+    if (!decision) {
+      return;
+    }
+    context.logGateway.warn(
+      `gateway abuse incident signal source=${params.source} severity=${params.severity} incidentId=${decision.incidentId} state=${decision.state} autoContained=${decision.autoContained ? "yes" : "no"} checkId=${params.checkId}`,
+    );
+  };
+
+  if (abuseTupleKey && incidentConfig) {
+    const containment = getActiveGatewayAbuseContainment({ key: abuseTupleKey });
+    if (containment.active) {
+      context.logGateway.warn(
+        `gateway abuse containment active method=${req.method} incidentId=${containment.incidentId ?? "unknown"} retryAfterMs=${containment.retryAfterMs} scope=${containment.scopeKey}`,
+      );
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `incident containment active for ${req.method}; retry after ${Math.ceil(containment.retryAfterMs / 1000)}s`,
+          {
+            retryable: true,
+            retryAfterMs: containment.retryAfterMs,
+            details: {
+              checkId: "gateway.abuse.incident.containment",
+              incidentId: containment.incidentId,
+              scope: containment.scopeKey,
+            },
+          },
+        ),
+      );
+      return;
+    }
+  }
 
   const recordCorrelation = (params: {
     source: "request" | "quota" | "anomaly";
@@ -178,6 +239,13 @@ export async function handleGatewayRequest(
     context.logGateway.warn(
       `gateway abuse correlation observed method=${req.method} mode=${decision.mode} severity=${decision.severity} score=${decision.clusterScore} threshold=${thresholdLabel} checkId=${decision.checkId} clusterId=${decision.clusterId} fingerprint=${decision.fingerprint} fanoutActors=${decision.fanout.actors} fanoutIps=${decision.fanout.ips} fanoutAccounts=${decision.fanout.accounts} key=${abuseTupleKey}`,
     );
+    recordIncident({
+      source: "correlation",
+      severity: decision.severity === "critical" ? "critical" : "warn",
+      checkId: decision.checkId,
+      reasonCodes: params.reasonCodes,
+      clusterId: decision.clusterId,
+    });
   };
 
   const maybeRecordRequestCorrelation = () => {
@@ -210,6 +278,12 @@ export async function handleGatewayRequest(
       context.logGateway.warn(
         `gateway abuse anomaly observed method=${req.method} mode=${anomalyDecision.mode} action=${anomalyDecision.action} score=${anomalyDecision.score} threshold=${thresholdLabel} checkId=${anomalyDecision.checkId} retryAfterMs=${anomalyDecision.retryAfterMs} fingerprint=${anomalyDecision.fingerprint ?? "none"} reasons=${anomalyDecision.reasonCodes.join(",") || "none"} key=${anomalyDecision.key}`,
       );
+      recordIncident({
+        source: "anomaly",
+        severity: anomalyDecision.action === "warn" ? "warn" : "critical",
+        checkId: anomalyDecision.checkId,
+        reasonCodes: anomalyDecision.reasonCodes,
+      });
       if (anomalyDecision.fingerprint) {
         recordCorrelation({
           source: "anomaly",
@@ -257,6 +331,12 @@ export async function handleGatewayRequest(
       context.logGateway.warn(
         `gateway abuse quota observed method=${req.method} mode=${budget.mode} scope=${budget.scope} limit=${limitLabel} window=${windowLabel} retryAfterMs=${budget.retryAfterMs} key=${budget.key}`,
       );
+      recordIncident({
+        source: "quota",
+        severity: budget.allowed ? "warn" : "critical",
+        checkId: "gateway.abuse.quota.observed",
+        reasonCodes: [`quota_${budget.scope}`],
+      });
       recordCorrelation({
         source: "quota",
         score: budget.limit ?? 25,
