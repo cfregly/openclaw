@@ -29,7 +29,11 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
-import type { ResolvedGatewayAbuseQuotaConfig } from "./abuse-config.js";
+import { consumeGatewayAbuseAnomaly } from "./abuse-anomaly.js";
+import type {
+  ResolvedGatewayAbuseAnomalyConfig,
+  ResolvedGatewayAbuseQuotaConfig,
+} from "./abuse-config.js";
 import { consumeGatewayAbuseQuota, resolveGatewayAbuseQuotaHttpKey } from "./abuse-quota.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -55,6 +59,7 @@ type OpenResponsesHttpOptions = {
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
   abuseQuotaConfig?: ResolvedGatewayAbuseQuotaConfig;
+  anomalyConfig?: ResolvedGatewayAbuseAnomalyConfig;
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
@@ -470,6 +475,35 @@ export async function handleOpenResponsesHttpRequest(
         type: "invalid_request_error",
       },
     });
+    return true;
+  }
+
+  const anomalyDecision = consumeGatewayAbuseAnomaly({
+    key: resolveGatewayAbuseQuotaHttpKey({
+      method: "chat.send",
+      req,
+      trustedProxies: opts.trustedProxies,
+      allowRealIpFallback: opts.allowRealIpFallback,
+      actorId: user ? `user:${user}` : `agent:${agentId}`,
+      sessionKey: explicitSessionKey,
+    }),
+    input: {
+      text: [extraSystemPrompt, prompt.message].filter(Boolean).join("\n\n"),
+    },
+    anomalyConfig: opts.anomalyConfig,
+  });
+  if (anomalyDecision.observed) {
+    const thresholdLabel = anomalyDecision.threshold ? String(anomalyDecision.threshold) : "n/a";
+    logWarn(
+      `openresponses: abuse anomaly observed mode=${anomalyDecision.mode} action=${anomalyDecision.action} score=${anomalyDecision.score} threshold=${thresholdLabel} checkId=${anomalyDecision.checkId} retryAfterMs=${anomalyDecision.retryAfterMs} fingerprint=${anomalyDecision.fingerprint ?? "none"} reasons=${anomalyDecision.reasonCodes.join(",") || "none"} key=${anomalyDecision.key}`,
+    );
+  }
+  if (!anomalyDecision.allowed) {
+    sendRateLimited(
+      res,
+      anomalyDecision.retryAfterMs,
+      `anomaly policy triggered for chat.send; retry after ${Math.ceil(anomalyDecision.retryAfterMs / 1000)}s`,
+    );
     return true;
   }
 
