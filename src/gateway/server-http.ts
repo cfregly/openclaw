@@ -506,6 +506,7 @@ export function createGatewayHttpServer(opts: {
       const abuseConfig = resolveGatewayAbuseConfig(configSnapshot);
       const abuseQuotaConfig = abuseConfig.quota;
       const anomalyConfig = abuseConfig.anomaly;
+      const correlationConfig = abuseConfig.correlation;
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
@@ -561,6 +562,7 @@ export function createGatewayHttpServer(opts: {
             rateLimiter,
             abuseQuotaConfig,
             anomalyConfig,
+            correlationConfig,
           })
         ) {
           return;
@@ -575,6 +577,7 @@ export function createGatewayHttpServer(opts: {
             rateLimiter,
             abuseQuotaConfig,
             anomalyConfig,
+            correlationConfig,
           })
         ) {
           return;

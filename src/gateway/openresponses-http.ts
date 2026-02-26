@@ -32,8 +32,13 @@ import { defaultRuntime } from "../runtime.js";
 import { consumeGatewayAbuseAnomaly } from "./abuse-anomaly.js";
 import type {
   ResolvedGatewayAbuseAnomalyConfig,
+  ResolvedGatewayAbuseCorrelationConfig,
   ResolvedGatewayAbuseQuotaConfig,
 } from "./abuse-config.js";
+import {
+  recordGatewayAbuseCorrelationSignal,
+  resolveGatewayAbuseCorrelationFingerprint,
+} from "./abuse-correlation.js";
 import { consumeGatewayAbuseQuota, resolveGatewayAbuseQuotaHttpKey } from "./abuse-quota.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -60,6 +65,7 @@ type OpenResponsesHttpOptions = {
   rateLimiter?: AuthRateLimiter;
   abuseQuotaConfig?: ResolvedGatewayAbuseQuotaConfig;
   anomalyConfig?: ResolvedGatewayAbuseAnomalyConfig;
+  correlationConfig?: ResolvedGatewayAbuseCorrelationConfig;
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
@@ -314,15 +320,45 @@ export async function handleOpenResponsesHttpRequest(
   const sessionKey = resolveOpenResponsesSessionKey({ req, agentId, user });
 
   const explicitSessionKey = getHeader(req, "x-openclaw-session-key")?.trim();
+  const abuseTupleKey = resolveGatewayAbuseQuotaHttpKey({
+    method: "chat.send",
+    req,
+    trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
+    actorId: user ? `user:${user}` : `agent:${agentId}`,
+    sessionKey: explicitSessionKey,
+  });
+  let correlationFingerprint = resolveGatewayAbuseCorrelationFingerprint({
+    method: "chat.send",
+    text:
+      typeof payload.input === "string"
+        ? payload.input
+        : JSON.stringify(payload.input ?? {}).slice(0, 4_000),
+  });
+  const recordCorrelation = (params: {
+    source: "request" | "quota" | "anomaly";
+    score: number;
+    reasonCodes: string[];
+    fingerprint: string;
+  }) => {
+    const decision = recordGatewayAbuseCorrelationSignal({
+      key: abuseTupleKey,
+      source: params.source,
+      score: params.score,
+      reasonCodes: params.reasonCodes,
+      fingerprint: params.fingerprint,
+      correlationConfig: opts.correlationConfig,
+    });
+    if (!decision.observed) {
+      return;
+    }
+    const thresholdLabel = decision.threshold ? String(decision.threshold) : "n/a";
+    logWarn(
+      `openresponses: abuse correlation observed severity=${decision.severity} mode=${decision.mode} score=${decision.clusterScore} threshold=${thresholdLabel} checkId=${decision.checkId} clusterId=${decision.clusterId} fingerprint=${decision.fingerprint} fanoutActors=${decision.fanout.actors} fanoutIps=${decision.fanout.ips} fanoutAccounts=${decision.fanout.accounts}`,
+    );
+  };
   const quotaBudget = consumeGatewayAbuseQuota({
-    key: resolveGatewayAbuseQuotaHttpKey({
-      method: "chat.send",
-      req,
-      trustedProxies: opts.trustedProxies,
-      allowRealIpFallback: opts.allowRealIpFallback,
-      actorId: user ? `user:${user}` : `agent:${agentId}`,
-      sessionKey: explicitSessionKey,
-    }),
+    key: abuseTupleKey,
     quotaConfig: opts.abuseQuotaConfig,
   });
   if (quotaBudget.observed) {
@@ -333,6 +369,12 @@ export async function handleOpenResponsesHttpRequest(
     logWarn(
       `openresponses: abuse quota observed mode=${quotaBudget.mode} scope=${quotaBudget.scope} limit=${limitLabel} window=${windowLabel} retryAfterMs=${quotaBudget.retryAfterMs} key=${quotaBudget.key}`,
     );
+    recordCorrelation({
+      source: "quota",
+      score: quotaBudget.limit ?? 25,
+      reasonCodes: [`quota_${quotaBudget.scope}`],
+      fingerprint: correlationFingerprint,
+    });
   }
   if (!quotaBudget.allowed) {
     sendRateLimited(
@@ -478,15 +520,19 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
 
+  correlationFingerprint = resolveGatewayAbuseCorrelationFingerprint({
+    method: "chat.send",
+    text: [extraSystemPrompt, prompt.message].filter(Boolean).join("\n\n"),
+  });
+  recordCorrelation({
+    source: "request",
+    score: 10,
+    reasonCodes: ["method_call"],
+    fingerprint: correlationFingerprint,
+  });
+
   const anomalyDecision = consumeGatewayAbuseAnomaly({
-    key: resolveGatewayAbuseQuotaHttpKey({
-      method: "chat.send",
-      req,
-      trustedProxies: opts.trustedProxies,
-      allowRealIpFallback: opts.allowRealIpFallback,
-      actorId: user ? `user:${user}` : `agent:${agentId}`,
-      sessionKey: explicitSessionKey,
-    }),
+    key: abuseTupleKey,
     input: {
       text: [extraSystemPrompt, prompt.message].filter(Boolean).join("\n\n"),
     },
@@ -497,6 +543,14 @@ export async function handleOpenResponsesHttpRequest(
     logWarn(
       `openresponses: abuse anomaly observed mode=${anomalyDecision.mode} action=${anomalyDecision.action} score=${anomalyDecision.score} threshold=${thresholdLabel} checkId=${anomalyDecision.checkId} retryAfterMs=${anomalyDecision.retryAfterMs} fingerprint=${anomalyDecision.fingerprint ?? "none"} reasons=${anomalyDecision.reasonCodes.join(",") || "none"} key=${anomalyDecision.key}`,
     );
+    if (anomalyDecision.fingerprint) {
+      recordCorrelation({
+        source: "anomaly",
+        score: anomalyDecision.score,
+        reasonCodes: anomalyDecision.reasonCodes,
+        fingerprint: anomalyDecision.fingerprint,
+      });
+    }
   }
   if (!anomalyDecision.allowed) {
     sendRateLimited(
