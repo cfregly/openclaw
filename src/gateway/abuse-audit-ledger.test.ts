@@ -7,6 +7,7 @@ import {
   queryGatewayAbuseAuditLedger,
   recordGatewayAbuseAuditEvent,
 } from "./abuse-audit-ledger.js";
+import { buildGatewayAbuseTupleKey } from "./abuse-tuple-key.js";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -25,14 +26,30 @@ describe("gateway abuse audit ledger", () => {
     };
     recordGatewayAbuseAuditEvent({
       kind: "request",
-      key: "method=send|actor=actor-a|device=d1|ip=10.0.0.1|session=s1|channel=telegram|account=acct-a",
+      key: buildGatewayAbuseTupleKey({
+        method: "send",
+        actor: "actor-a",
+        device: "d1",
+        ip: "10.0.0.1",
+        session: "s1",
+        channel: "telegram",
+        account: "acct-a",
+      }),
       tool: "sendText",
       auditConfig: config,
       nowMs: 1_000,
     });
     recordGatewayAbuseAuditEvent({
       kind: "anomaly",
-      key: "method=chat.send|actor=actor-b|device=d2|ip=10.0.0.2|session=s2|channel=none|account=none",
+      key: buildGatewayAbuseTupleKey({
+        method: "chat.send",
+        actor: "actor-b",
+        device: "d2",
+        ip: "10.0.0.2",
+        session: "s2",
+        channel: "none",
+        account: "none",
+      }),
       checkId: "gateway.abuse.anomaly.warning",
       auditConfig: config,
       nowMs: 2_000,
@@ -56,19 +73,43 @@ describe("gateway abuse audit ledger", () => {
     };
     recordGatewayAbuseAuditEvent({
       kind: "request",
-      key: "method=send|actor=a|device=d|ip=1|session=s|channel=telegram|account=acct",
+      key: buildGatewayAbuseTupleKey({
+        method: "send",
+        actor: "a",
+        device: "d",
+        ip: "1",
+        session: "s",
+        channel: "telegram",
+        account: "acct",
+      }),
       auditConfig: config,
       nowMs: 0,
     });
     recordGatewayAbuseAuditEvent({
       kind: "request",
-      key: "method=send|actor=b|device=d|ip=2|session=s|channel=telegram|account=acct",
+      key: buildGatewayAbuseTupleKey({
+        method: "send",
+        actor: "b",
+        device: "d",
+        ip: "2",
+        session: "s",
+        channel: "telegram",
+        account: "acct",
+      }),
       auditConfig: config,
       nowMs: 1_000,
     });
     recordGatewayAbuseAuditEvent({
       kind: "request",
-      key: "method=send|actor=c|device=d|ip=3|session=s|channel=telegram|account=acct",
+      key: buildGatewayAbuseTupleKey({
+        method: "send",
+        actor: "c",
+        device: "d",
+        ip: "3",
+        session: "s",
+        channel: "telegram",
+        account: "acct",
+      }),
       auditConfig: config,
       nowMs: 2_000,
     });
@@ -85,7 +126,15 @@ describe("gateway abuse audit ledger", () => {
 
       recordGatewayAbuseAuditEvent({
         kind: "incident",
-        key: "method=chat.send|actor=a|device=d|ip=127.0.0.1|session=s|channel=none|account=none",
+        key: buildGatewayAbuseTupleKey({
+          method: "chat.send",
+          actor: "a",
+          device: "d",
+          ip: "127.0.0.1",
+          session: "s",
+          channel: "none",
+          account: "none",
+        }),
         incidentId: "inc_000001",
         payload: { raw: "sensitive" },
         auditConfig: {

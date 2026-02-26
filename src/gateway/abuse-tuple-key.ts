@@ -10,6 +10,8 @@ export type GatewayAbuseTuple = {
 
 export type GatewayAbuseTupleScope = Omit<GatewayAbuseTuple, "method">;
 
+const TUPLE_KEY_PREFIX = "tuple-v1";
+
 const DEFAULT_GATEWAY_ABUSE_TUPLE: GatewayAbuseTuple = {
   method: "unknown-method",
   actor: "unknown-actor",
@@ -48,7 +50,7 @@ function unescapeTupleValue(value: string): string {
 }
 
 export function buildGatewayAbuseTupleKey(tuple: GatewayAbuseTuple): string {
-  return TUPLE_FIELDS.map((field) => `${field}=${escapeTupleValue(tuple[field])}`).join("|");
+  return `${TUPLE_KEY_PREFIX}|${TUPLE_FIELDS.map((field) => `${field}=${escapeTupleValue(tuple[field])}`).join("|")}`;
 }
 
 export function buildGatewayAbuseTupleScopeKey(tuple: GatewayAbuseTuple): string {
@@ -59,7 +61,11 @@ export function parseGatewayAbuseTupleKey(key: string): GatewayAbuseTuple {
   const tuple: GatewayAbuseTuple = {
     ...DEFAULT_GATEWAY_ABUSE_TUPLE,
   };
-  for (const part of key.split("|")) {
+  if (!key.startsWith(`${TUPLE_KEY_PREFIX}|`)) {
+    return tuple;
+  }
+  const rawParts = key.slice(TUPLE_KEY_PREFIX.length + 1);
+  for (const part of rawParts.split("|")) {
     const separatorIndex = part.indexOf("=");
     if (separatorIndex <= 0) {
       continue;

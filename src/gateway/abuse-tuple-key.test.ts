@@ -18,6 +18,7 @@ describe("gateway abuse tuple key", () => {
     };
     const key = buildGatewayAbuseTupleKey(tuple);
 
+    expect(key).toContain("tuple-v1|");
     expect(key).toContain("actor=auth-user:alice%7Croot%3D1%25");
     expect(key).toContain("session=agent:main:openai:user%3Dalice%7Cprod");
 
@@ -25,16 +26,16 @@ describe("gateway abuse tuple key", () => {
     expect(parsed).toEqual(tuple);
   });
 
-  it("parses legacy unescaped tuple keys for backward compatibility", () => {
-    const legacyKey =
-      "method=chat.send|actor=user:alice|device=d1|ip=10.0.0.1|session=s1|channel=none|account=none";
-    const parsed = parseGatewayAbuseTupleKey(legacyKey);
+  it("rejects keys that do not use tuple-v1 format", () => {
+    const parsed = parseGatewayAbuseTupleKey(
+      "method=chat.send|actor=user:alice|device=d1|ip=10.0.0.1|session=s1|channel=none|account=none",
+    );
     expect(parsed).toEqual({
-      method: "chat.send",
-      actor: "user:alice",
-      device: "d1",
-      ip: "10.0.0.1",
-      session: "s1",
+      method: "unknown-method",
+      actor: "unknown-actor",
+      device: "unknown-device",
+      ip: "unknown-ip",
+      session: "none",
       channel: "none",
       account: "none",
     });
