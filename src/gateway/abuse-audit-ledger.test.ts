@@ -54,14 +54,35 @@ describe("gateway abuse audit ledger", () => {
       auditConfig: config,
       nowMs: 2_000,
     });
+    recordGatewayAbuseAuditEvent({
+      kind: "tool_event",
+      key: buildGatewayAbuseTupleKey({
+        method: "chat.send",
+        actor: "actor-a",
+        device: "d1",
+        ip: "10.0.0.1",
+        session: "s1",
+        channel: "telegram",
+        account: "acct-a",
+      }),
+      runId: "run-1",
+      tool: "read",
+      action: "result",
+      auditConfig: config,
+      nowMs: 3_000,
+    });
 
     const byActor = queryGatewayAbuseAuditLedger({ actor: "actor-a" });
-    expect(byActor.length).toBe(1);
-    expect(byActor[0]?.channel).toBe("telegram");
+    expect(byActor.length).toBe(2);
+    expect(byActor.every((row) => row.channel === "telegram")).toBe(true);
 
     const byTool = queryGatewayAbuseAuditLedger({ tool: "sendText" });
     expect(byTool.length).toBe(1);
     expect(byTool[0]?.actor).toBe("actor-a");
+
+    const byRun = queryGatewayAbuseAuditLedger({ runId: "run-1" });
+    expect(byRun.length).toBe(1);
+    expect(byRun[0]?.kind).toBe("tool_event");
   });
 
   it("enforces retention and maxRecords bounds", () => {

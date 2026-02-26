@@ -5,6 +5,8 @@ import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { recordGatewayAbuseAuditEvent } from "./abuse-audit-ledger.js";
+import { resolveGatewayAbuseConfig } from "./abuse-config.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -73,6 +75,44 @@ function normalizeHeartbeatChatFinalText(params: {
     return { suppress: true, text: "" };
   }
   return { suppress: false, text: stripped.text };
+}
+
+function resolveGatewayAbuseAuditLedgerConfig() {
+  try {
+    return resolveGatewayAbuseConfig(loadConfig()).auditLedger;
+  } catch {
+    return undefined;
+  }
+}
+
+function estimateJsonBytes(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  try {
+    return Buffer.byteLength(JSON.stringify(value), "utf-8");
+  } catch {
+    return undefined;
+  }
+}
+
+function summarizeToolEventData(data: Record<string, unknown>) {
+  const phase = typeof data.phase === "string" ? data.phase : "unknown";
+  const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : undefined;
+  const isError = data.isError === true;
+  const hasResult = Object.prototype.hasOwnProperty.call(data, "result");
+  const hasPartialResult = Object.prototype.hasOwnProperty.call(data, "partialResult");
+  const resultBytes = hasResult ? estimateJsonBytes(data.result) : undefined;
+  const partialResultBytes = hasPartialResult ? estimateJsonBytes(data.partialResult) : undefined;
+  return {
+    phase,
+    toolCallId,
+    isError,
+    hasResult,
+    hasPartialResult,
+    resultBytes,
+    partialResultBytes,
+  };
 }
 
 export type ChatRunEntry = {
@@ -389,6 +429,51 @@ export function createAgentEventHandler({
     }
   };
 
+  const recordToolAuditEvent = (params: {
+    evt: AgentEventPayload;
+    eventRunId: string;
+    sessionKey?: string;
+  }) => {
+    const runContext = getAgentRunContext(params.evt.runId);
+    const key = runContext?.abuseAuditKey;
+    if (!key) {
+      return;
+    }
+    const auditConfig = resolveGatewayAbuseAuditLedgerConfig();
+    if (!auditConfig || auditConfig.mode === "off") {
+      return;
+    }
+    const toolName =
+      typeof params.evt.data?.name === "string" && params.evt.data.name.trim().length > 0
+        ? params.evt.data.name.trim()
+        : undefined;
+    const summary = summarizeToolEventData(params.evt.data ?? {});
+    recordGatewayAbuseAuditEvent({
+      kind: "tool_event",
+      key,
+      method: runContext?.abuseAuditMethod ?? "chat.send",
+      runId: params.evt.runId,
+      tool: toolName,
+      allowed: !summary.isError,
+      action: summary.phase,
+      checkId: "gateway.abuse.audit.tool_event",
+      severity: summary.isError ? "warn" : undefined,
+      reasonCodes: [`tool_phase_${summary.phase}`],
+      payload: {
+        sourceRunId: params.evt.runId,
+        clientRunId: params.eventRunId !== params.evt.runId ? params.eventRunId : undefined,
+        sessionKey: params.sessionKey,
+        toolCallId: summary.toolCallId,
+        isError: summary.isError,
+        hasResult: summary.hasResult,
+        hasPartialResult: summary.hasPartialResult,
+        resultBytes: summary.resultBytes,
+        partialResultBytes: summary.partialResultBytes,
+      },
+      auditConfig,
+    });
+  };
+
   return (evt: AgentEventPayload) => {
     const chatLink = chatRunState.registry.peek(evt.runId);
     const eventSessionKey =
@@ -432,6 +517,11 @@ export function createAgentEventHandler({
     }
     agentRunSeq.set(evt.runId, evt.seq);
     if (isToolEvent) {
+      recordToolAuditEvent({
+        evt,
+        eventRunId,
+        sessionKey,
+      });
       // Always broadcast tool events to registered WS recipients with
       // tool-events capability, regardless of verboseLevel. The verbose
       // setting only controls whether tool details are sent as channel

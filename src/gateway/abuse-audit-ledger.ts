@@ -11,7 +11,9 @@ export type GatewayAbuseAuditKind =
   | "quota"
   | "correlation"
   | "incident"
-  | "containment";
+  | "containment"
+  | "tool_event"
+  | "extension_event";
 
 export type GatewayAbuseAuditRecord = {
   id: number;
@@ -24,6 +26,7 @@ export type GatewayAbuseAuditRecord = {
   session: string;
   channel: string;
   account: string;
+  runId?: string;
   tool?: string;
   allowed?: boolean;
   action?: string;
@@ -158,6 +161,7 @@ export function recordGatewayAbuseAuditEvent(params: {
   kind: GatewayAbuseAuditKind;
   key: string;
   method?: string;
+  runId?: string;
   tool?: string;
   allowed?: boolean;
   action?: string;
@@ -192,6 +196,7 @@ export function recordGatewayAbuseAuditEvent(params: {
     session: tuple.session,
     channel: tuple.channel,
     account: tuple.account,
+    runId: params.runId,
     tool: params.tool,
     allowed: params.allowed,
     action: params.action,
@@ -218,6 +223,7 @@ export function queryGatewayAbuseAuditLedger(params?: {
   channel?: string;
   tool?: string;
   incidentId?: string;
+  runId?: string;
 }): GatewayAbuseAuditRecord[] {
   ensureLoaded();
   const limit = params?.limit ? Math.max(1, Math.min(5_000, Math.floor(params.limit))) : 100;
@@ -235,6 +241,9 @@ export function queryGatewayAbuseAuditLedger(params?: {
       return false;
     }
     if (params?.incidentId && record.incidentId !== params.incidentId) {
+      return false;
+    }
+    if (params?.runId && record.runId !== params.runId) {
       return false;
     }
     return true;

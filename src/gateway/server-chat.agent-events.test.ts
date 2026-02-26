@@ -1,7 +1,15 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config/config.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import {
+  __testing as auditLedgerTesting,
+  queryGatewayAbuseAuditLedger,
+} from "./abuse-audit-ledger.js";
+import { buildGatewayAbuseTupleKey } from "./abuse-tuple-key.js";
 import {
   createAgentEventHandler,
   createChatRunState,
@@ -28,10 +36,13 @@ describe("agent event handler", () => {
       showAlerts: true,
       useIndicator: true,
     });
+    auditLedgerTesting.resetGatewayAbuseAuditLedgerState();
     resetAgentRunContextForTest();
   });
 
   afterEach(() => {
+    auditLedgerTesting.resetGatewayAbuseAuditLedgerState();
+    delete process.env.OPENCLAW_STATE_DIR;
     resetAgentRunContextForTest();
   });
 
@@ -349,6 +360,70 @@ describe("agent event handler", () => {
     const payload = broadcastToConnIds.mock.calls[0]?.[1] as { data?: Record<string, unknown> };
     expect(payload.data?.result).toEqual(result);
     resetAgentRunContextForTest();
+  });
+
+  it("records redaction-safe tool_event audit rows when abuse audit ledger is enabled", () => {
+    process.env.OPENCLAW_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tool-audit-"));
+    vi.mocked(loadConfig).mockReturnValue({
+      gateway: {
+        abuse: {
+          auditLedger: {
+            mode: "observe",
+            retentionDays: 14,
+            maxRecords: 100,
+            redactPayloads: false,
+          },
+        },
+      },
+    });
+    const { toolEventRecipients, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-audit",
+    });
+
+    registerAgentRunContext("run-tool-audit", {
+      sessionKey: "session-audit",
+      verboseLevel: "off",
+      abuseAuditKey: buildGatewayAbuseTupleKey({
+        method: "chat.send",
+        actor: "actor-1",
+        device: "device-1",
+        ip: "10.0.0.1",
+        session: "session-audit",
+        channel: "webchat",
+        account: "none",
+      }),
+      abuseAuditMethod: "chat.send",
+    });
+    toolEventRecipients.add("run-tool-audit", "conn-audit");
+
+    handler({
+      runId: "run-tool-audit",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: {
+        phase: "result",
+        name: "exec",
+        toolCallId: "tool-audit-1",
+        isError: false,
+        result: { content: [{ type: "text", text: "secret output" }] },
+      },
+    });
+
+    const rows = queryGatewayAbuseAuditLedger({
+      kind: "tool_event",
+      runId: "run-tool-audit",
+      limit: 10,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.actor).toBe("actor-1");
+    expect(rows[0]?.tool).toBe("exec");
+    expect(rows[0]?.action).toBe("result");
+    const payload = rows[0]?.payload as Record<string, unknown>;
+    expect(payload?.toolCallId).toBe("tool-audit-1");
+    expect(payload?.hasResult).toBe(true);
+    expect(typeof payload?.resultBytes).toBe("number");
+    expect(JSON.stringify(payload)).not.toContain("secret output");
   });
 
   it("broadcasts fallback events to agent subscribers and node session", () => {
