@@ -21,6 +21,12 @@ type BuildTelegramMessageContextForTestParams = {
   resolveTelegramGroupConfig?: BuildTelegramMessageContextParams["resolveTelegramGroupConfig"];
 };
 
+const sendChatActionHandlerForTest: BuildTelegramMessageContextParams["sendChatActionHandler"] = {
+  sendChatAction: vi.fn(async () => undefined),
+  isSuspended: () => false,
+  reset: () => undefined,
+};
+
 export async function buildTelegramMessageContextForTest(
   params: BuildTelegramMessageContextForTestParams,
 ): Promise<Awaited<ReturnType<typeof buildTelegramMessageContext>>> {
@@ -61,6 +67,6 @@ export async function buildTelegramMessageContextForTest(
         groupConfig: { requireMention: false },
         topicConfig: undefined,
       })),
-    sendChatActionHandler: { sendChatAction: vi.fn() } as never,
+    sendChatActionHandler: sendChatActionHandlerForTest,
   });
 }
